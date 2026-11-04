@@ -154,7 +154,11 @@
     }
     // ----- host side -----
     pickSeat(seat) {
-      if (this.isHost) return;
+      if (this.isHost) { // the host may change crowns until the campaign begins
+        if (this.st || (this.lobby.seats[seat] != null && seat !== this.seat)) return;
+        delete this.lobby.seats[this.seat]; delete this.lobby.cids[this.seat]; this.seat = seat; this.lobby.seats[seat] = this.name; this.lobby.cids[seat] = this.cid;
+        this.remember(); this.send({ t: 'lobby', lobby: this.lobby }); this.emit('lobby'); return;
+      }
       this.send({ t: 'seat', seat, name: this.name });
     }
     start() {

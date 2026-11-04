@@ -126,6 +126,39 @@
     }
     stampCache[key] = s; return s;
   }
+  // unit-type badge drawn on every block: pike, sword & shield, archer, cavalry, horse archer, chariot, elephant, siege
+  function iconOf(r) {
+    const d = r.def, t = r.type;
+    if (d.cls === 'ele') return 'ele'; if (d.cls === 'sie') return 'siege';
+    if (d.cls === 'cav') return t === 'horsearcher' ? 'hbow' : t === 'chariot' ? 'chariot' : 'horse';
+    if (d.cls === 'msl') return 'bow';
+    if (/pike|spear|hoplite|impi/.test(t)) return 'pike';
+    return 'sword';
+  }
+  HB.iconOf = iconOf;
+  function drawUnitIcon(g, k, x, y, s, col) {
+    g.save(); g.translate(x, y);
+    g.fillStyle = 'rgba(244,228,186,0.95)'; g.beginPath(); g.arc(0, 0, s, 0, TAU); g.fill();
+    g.lineWidth = Math.max(1.6, s * 0.2); g.strokeStyle = col; g.stroke();
+    g.strokeStyle = '#2a1a06'; g.fillStyle = '#2a1a06'; g.lineWidth = Math.max(1.2, s * 0.14); g.lineCap = 'round'; g.lineJoin = 'round';
+    const u = s / 10; g.scale(u, u);
+    const L = (a, b, c, d) => { g.beginPath(); g.moveTo(a, b); g.lineTo(c, d); g.stroke(); };
+    const tip = (x0, y0) => { g.beginPath(); g.moveTo(x0, y0 - 3.5); g.lineTo(x0 - 1.8, y0); g.lineTo(x0 + 1.8, y0); g.closePath(); g.fill(); };
+    g.lineWidth = 1.5;
+    if (k === 'pike') { for (const dx of [-3.5, 0, 3.5]) { L(dx, 7, dx, -4); tip(dx, -4); } }
+    else if (k === 'sword') { g.beginPath(); g.moveTo(-6, -5); g.lineTo(0, -6.5); g.lineTo(6, -5); g.lineTo(5, 2); g.quadraticCurveTo(0, 7.5, -5, 2); g.closePath(); g.stroke(); L(0, -4, 0, 4); L(-2.5, -1, 2.5, -1); }
+    else if (k === 'bow' || k === 'hbow') {
+      const ox = k === 'hbow' ? 1.5 : 0;
+      g.beginPath(); g.arc(ox - 4, 0, 7, -1.2, 1.2); g.stroke(); L(ox - 4 + 7 * Math.cos(1.2), -7 * Math.sin(1.2), ox - 4 + 7 * Math.cos(1.2), 7 * Math.sin(1.2));
+      L(ox - 6, 0, ox + 5, 0); g.beginPath(); g.moveTo(ox + 7, 0); g.lineTo(ox + 4, -2); g.lineTo(ox + 4, 2); g.closePath(); g.fill();
+      if (k === 'hbow') { g.beginPath(); g.arc(-6.5, 5, 2.6, Math.PI, 0); g.stroke(); }
+    }
+    else if (k === 'horse') { g.beginPath(); g.moveTo(-4, 7); g.lineTo(-3, 0); g.quadraticCurveTo(-3, -6, 3, -7); g.lineTo(6, -3); g.lineTo(4, -1); g.lineTo(1, -2); g.lineTo(2, 7); g.stroke(); g.beginPath(); g.arc(2.2, -4.6, 0.8, 0, TAU); g.fill(); }
+    else if (k === 'chariot') { g.beginPath(); g.arc(0, 1.5, 5.5, 0, TAU); g.stroke(); for (let i = 0; i < 4; i++) { const a = i * Math.PI / 4; L(Math.cos(a) * 5.5, 1.5 + Math.sin(a) * 5.5, -Math.cos(a) * 5.5, 1.5 - Math.sin(a) * 5.5); } L(-7, -5.5, 7, -5.5); }
+    else if (k === 'ele') { g.beginPath(); g.arc(-1, -1, 5, Math.PI * 0.9, Math.PI * 2.1); g.stroke(); g.beginPath(); g.moveTo(4, -1); g.quadraticCurveTo(6, 4, 3, 7); g.stroke(); g.beginPath(); g.moveTo(1.5, 1); g.quadraticCurveTo(-1, 4, -4, 3); g.stroke(); L(-5, 0, -6, 6); L(-1.5, 3, -1.5, 7); }
+    else if (k === 'siege') { L(-6, 6, 0, -2); L(6, 6, 0, -2); L(-7, 6, 7, 6); L(-5, 3, 7, -6); g.beginPath(); g.arc(7, -6, 1.6, 0, TAU); g.fill(); }
+    g.restore();
+  }
   function kindOf(r) {
     const d = r.def;
     if (d.cls === 'cav') return 'cav'; if (d.cls === 'ele') return 'ele';
@@ -154,6 +187,17 @@
     }
     fitZ() { return Math.min(this.vw / (W * 0.98), this.vh / (H * 0.92)); }
     fit(now) { const z = this.fitZ(); this.cam.z = now ? z : this.cam.z; this.camT = { x: W / 2, y: H / 2, z }; if (now) { this.cam.x = W / 2; this.cam.y = H / 2; } }
+    // frame the camera on one side's army (start of a battle / deploy): close enough to read the blocks
+    frameOn(side, now) {
+      const b = this.b; if (!b) return; const mine = b.regs.filter(r => r.side === side && r.st === 0 && r.def.cls !== 'mon' && !r.relief);
+      if (!mine.length) return this.fit(now);
+      let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9; for (const r of mine) { const h = Math.max(r.W, r.D) / 2; x0 = Math.min(x0, r.x - h); x1 = Math.max(x1, r.x + h); y0 = Math.min(y0, r.y - h); y1 = Math.max(y1, r.y + h); }
+      let cx = 0, cy = 0; for (const r of mine) { cx += r.x; cy += r.y; } cx /= mine.length; cy /= mine.length;
+      const fz = this.fitZ(), z = Math.max(fz * 2.3, Math.min(fz * 3.2, Math.min(this.vw / (x1 - x0 + 60), this.vh / (y1 - y0 + 260))));
+      const t = { x: cx, y: cy - 60 / z, z }; // centred on the army's mass, a little toward the enemy this.camT = t;
+      if (now) { this.cam.x = t.x; this.cam.y = t.y; this.cam.z = z; this.clampCam(); }
+      return t;
+    }
     toWorld(sx, sy) { const c = this.cam; return { x: (sx - this.vw / 2) / c.z + c.x, y: (sy - this.vh / 2) / c.z + c.y }; }
     toScreen(x, y) { const c = this.cam; return { x: (x - c.x) * c.z + this.vw / 2, y: (y - c.y) * c.z + this.vh / 2 }; }
     clampCam() { const c = this.cam, hw = this.vw / 2 / c.z, hh = this.vh / 2 / c.z; c.x = Math.max(Math.min(hw, W / 2), Math.min(W - Math.min(hw, W / 2), c.x)); c.y = Math.max(Math.min(hh, H / 2) - 60, Math.min(H - Math.min(hh, H / 2) + 60, c.y)); }
@@ -163,10 +207,23 @@
       this.userCam = Math.max(0, this.userCam - dt);
       if (this.userCam > 0) return;
       const fz = this.fitZ(); let tx = W / 2, ty = H / 2, tz = fz;
-      if (spectate || b.regs.length > 30) {
+      if (spectate) {
         let sx = 0, sy = 0, n = 0;
         for (const r of b.regs) if (r.st === 0 && r.engaged) { sx += r.x; sy += r.y; n++; }
         if (n >= 2) { tx = sx / n; ty = sy / n; tz = fz * (spectate ? 1.35 : 1.15); }
+      }
+      else if (this.me != null && this.me >= 0) { // a player: follow my army and the fight it is in, never zoom right out
+        let mx = 0, my = 0, n = 0, ex = 0, ey = 0, ne = 0, x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+        for (const r of b.regs) {
+          if (r.st !== 0 || r.def.cls === 'mon') continue;
+          if (r.side === this.me) { mx += r.x; my += r.y; n++; x0 = Math.min(x0, r.x); x1 = Math.max(x1, r.x); y0 = Math.min(y0, r.y); y1 = Math.max(y1, r.y); }
+          if (r.engaged) { ex += r.x; ey += r.y; ne++; }
+        }
+        if (n) {
+          tx = mx / n; ty = my / n;
+          if (ne >= 2) { tx = tx * 0.4 + ex / ne * 0.6; ty = ty * 0.4 + ey / ne * 0.6; }
+          tz = Math.max(fz * (ne >= 2 ? 1.8 : 2.3), Math.min(fz * 3, Math.min(this.vw / (x1 - x0 + 160), this.vh / (y1 - y0 + 320)))); // close enough to read the blocks
+        }
       }
       if (this.focus && this.focus.T > 0) { this.focus.T -= dt; tx = this.focus.x; ty = this.focus.y; tz = fz * 1.8; }
       const k = Math.min(1, dt * 1.2), c = this.cam;
@@ -283,8 +340,6 @@
         else { const gr = g.createRadialGradient(f.x, f.y, 0, f.x, f.y, f.r * (0.5 + u)); gr.addColorStop(0, f.col); gr.addColorStop(1, 'rgba(255,240,200,0)'); g.fillStyle = gr; g.beginPath(); g.arc(f.x, f.y, f.r * (0.5 + u), 0, TAU); g.fill(); }
         g.globalAlpha = 1;
       }
-      // selection ring + formation picker (world-anchored, screen-sized)
-      if (this.sel != null) this.drawSelection(g, b.regs[this.sel], ui);
       // screen space: morale bars and callouts
       g.setTransform(dpr, 0, 0, dpr, shx * dpr, shy * dpr);
       for (const r of vis) {
@@ -296,7 +351,10 @@
         g.fillStyle = 'rgba(20,14,6,0.8)'; g.fillRect(p.x - bw / 2 - 1, y - 1, bw + 2, 4);
         g.fillStyle = m > 0.55 ? '#7fbf4a' : m > 0.3 ? '#e0b53a' : '#d0452f'; g.fillRect(p.x - bw / 2, y, bw * m, 2);
         g.fillStyle = this.colorOf(r.side); g.fillRect(p.x - bw / 2 - 3, y - 1, 2, 4);
+        if (r.def.cls !== 'mon') drawUnitIcon(g, iconOf(r), p.x - bw / 2 - 13, y + 1, Math.max(8, Math.min(12, 8 + c.z * 3)), this.colorOf(r.side));
       }
+      // selection ring + formation picker (world-anchored, screen-sized), drawn over the unit badges
+      if (this.sel != null) { g.setTransform(dpr * c.z, 0, 0, dpr * c.z, dpr * (this.vw / 2 - c.x * c.z + shx), dpr * (this.vh / 2 - c.y * c.z + shy)); this.drawSelection(g, b.regs[this.sel], ui); g.setTransform(dpr, 0, 0, dpr, shx * dpr, shy * dpr); }
       g.textAlign = 'center'; g.textBaseline = 'middle';
       for (let i = this.texts.length - 1; i >= 0; i--) {
         const t = this.texts[i]; t.t += dt; if (t.t > t.T) { this.texts.splice(i, 1); continue; }
@@ -376,18 +434,22 @@
       // facing tick
       g.strokeStyle = '#f5cf5a'; g.lineWidth = 2 / c.z; g.beginPath(); g.moveTo(r.x + Math.cos(r.f) * R, r.y + Math.sin(r.f) * R); g.lineTo(r.x + Math.cos(r.f) * (R + 9 / c.z), r.y + Math.sin(r.f) * (R + 9 / c.z)); g.stroke();
       // formation picker: 2-4 gold medallions around the ring (screen-sized)
+      if (!this.ringOpen) { this.ring = null; return; }
       const opts = this.ringOpts(r); this.ring = { id: r.id, items: [] };
-      const rs = R * c.z + 22, p0 = this.toScreen(r.x, r.y), n = opts.length, start = -Math.PI / 2 - (n - 1) * 0.42;
+      // medallions sit in a row clear of the block (above it, or below when the block is near the top of the screen), spaced so labels never collide
+      const MR = 24, GAP = 90, p0 = this.toScreen(r.x, r.y), n = opts.length, rs = Math.max(R * c.z + MR + 22, 80), up = p0.y - rs - MR - 10 > 70;
+      const ry = up ? p0.y - rs : p0.y + rs, w0 = (n - 1) * GAP; let x0 = p0.x - w0 / 2; x0 = Math.max(MR + 30, Math.min(this.vw - MR - 30 - w0, x0));
       g.save(); g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      g.strokeStyle = 'rgba(245,207,90,0.7)'; g.lineWidth = 1.5; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(p0.x, p0.y + (up ? -R * c.z : R * c.z)); g.lineTo(Math.max(x0, Math.min(x0 + w0, p0.x)), ry + (up ? MR : -MR)); g.stroke(); g.setLineDash([]);
       opts.forEach((o, i) => {
-        const a = start + i * 0.84, x = p0.x + Math.cos(a) * rs, y = p0.y + Math.sin(a) * rs, on = o.on;
-        g.fillStyle = 'rgba(0,0,0,0.4)'; g.beginPath(); g.arc(x + 1.5, y + 2, 17, 0, TAU); g.fill();
-        const gr = g.createRadialGradient(x - 4, y - 5, 2, x, y, 17); gr.addColorStop(0, on ? '#fff0b0' : '#f3dc95'); gr.addColorStop(1, on ? '#c8961e' : '#9c7424');
-        g.fillStyle = gr; g.beginPath(); g.arc(x, y, 16, 0, TAU); g.fill();
-        g.strokeStyle = on ? '#fff6d0' : '#4a3210'; g.lineWidth = on ? 2.2 : 1.4; g.stroke();
-        g.fillStyle = '#2a1a06'; g.font = '700 15px ' + FONT; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(o.icon, x, y + 1);
-        g.font = '600 9px ' + FONT; g.lineWidth = 3; g.strokeStyle = 'rgba(20,12,4,0.85)'; g.strokeText(o.label, x, y + 25); g.fillStyle = '#f6e3a8'; g.fillText(o.label, x, y + 25);
-        this.ring.items.push({ x, y, r: 19, o });
+        const x = x0 + i * GAP, y = ry + (n > 2 && (i === 0 || i === n - 1) ? (up ? 10 : -10) : 0), on = o.on;
+        g.fillStyle = 'rgba(0,0,0,0.4)'; g.beginPath(); g.arc(x + 1.5, y + 2, MR + 1, 0, TAU); g.fill();
+        const gr = g.createRadialGradient(x - 5, y - 6, 2, x, y, MR); gr.addColorStop(0, on ? '#fff0b0' : '#f3dc95'); gr.addColorStop(1, on ? '#c8961e' : '#9c7424');
+        g.fillStyle = gr; g.beginPath(); g.arc(x, y, MR, 0, TAU); g.fill();
+        g.strokeStyle = on ? '#fff6d0' : '#4a3210'; g.lineWidth = on ? 2.6 : 1.6; g.stroke();
+        g.fillStyle = '#2a1a06'; g.font = '700 23px ' + FONT; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(o.icon, x, y + 1);
+        g.font = '700 13px ' + FONT; g.lineWidth = 3.5; g.strokeStyle = 'rgba(20,12,4,0.9)'; g.strokeText(o.label, x, y + MR + 12); g.fillStyle = '#f6e3a8'; g.fillText(o.label, x, y + MR + 12);
+        this.ring.items.push({ x, y, r: MR + 5, o });
       });
       g.restore();
     }

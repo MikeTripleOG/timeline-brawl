@@ -4,12 +4,12 @@
   'use strict';
   const HB = G.HB || (G.HB = {});
   const KINGDOMS = [
-    { id: 'eldenvale', name: 'Eldenvale', culture: 'celts', color: '#3f7d3a', tint: '#6f9a4f', crest: 'tree', motto: 'Root and thorn' },
-    { id: 'northgard', name: 'Northgard', culture: 'vikings', color: '#3b64a8', tint: '#8fb0d6', crest: 'wolf', motto: 'The cold remembers' },
-    { id: 'solenthia', name: 'Solenthia', culture: 'macedon', color: '#c9962a', tint: '#e2bf5a', crest: 'sun', motto: 'The sun does not kneel' },
-    { id: 'vellorien', name: 'Vellorien', culture: 'carthage', color: '#6d3f9a', tint: '#a07cc4', crest: 'fleur', motto: 'Gold buys the sea' },
-    { id: 'drakonia', name: 'Drakonia', culture: 'rome', color: '#b0302a', tint: '#d0614f', crest: 'lion', motto: 'Iron and law' },
-    { id: 'invader', name: 'The Crimson Horde', culture: 'mongols', color: '#8e1020', tint: '#6e1022', crest: 'dragon', motto: 'Everything under the sky', invader: true },
+    { id: 'eldenvale', ruler: 'Queen Maelis of the Thorn', name: 'Eldenvale', culture: 'celts', color: '#3f7d3a', tint: '#6f9a4f', crest: 'tree', motto: 'Root and thorn' },
+    { id: 'northgard', ruler: 'Jarl Ulfric Stormvald', name: 'Northgard', culture: 'vikings', color: '#3b64a8', tint: '#8fb0d6', crest: 'wolf', motto: 'The cold remembers' },
+    { id: 'solenthia', ruler: 'Basileus Aurelion', name: 'Solenthia', culture: 'macedon', color: '#c9962a', tint: '#e2bf5a', crest: 'sun', motto: 'The sun does not kneel' },
+    { id: 'vellorien', ruler: 'Doge Serafine Vell', name: 'Vellorien', culture: 'carthage', color: '#6d3f9a', tint: '#a07cc4', crest: 'fleur', motto: 'Gold buys the sea' },
+    { id: 'drakonia', ruler: 'Imperator Cassius Drake', name: 'Drakonia', culture: 'rome', color: '#b0302a', tint: '#d0614f', crest: 'lion', motto: 'Iron and law' },
+    { id: 'invader', ruler: 'The Crimson Warlord', name: 'The Crimson Horde', culture: 'mongols', color: '#8e1020', tint: '#6e1022', crest: 'dragon', motto: 'Everything under the sky', invader: true },
   ];
   const INV = 5;
   // p: owner kingdom (-1 neutral); cap: capital (walled city -> sieges); x,y on a 1600x900 map
@@ -25,7 +25,7 @@
   const ROADS = [[0, 1], [0, 5], [1, 3], [1, 5], [3, 2], [2, 7], [2, 10], [5, 4], [5, 10], [4, 9], [9, 8], [9, 10], [7, 6], [7, 10], [6, 9], [6, 12], [6, 11], [8, 11], [11, 13], [12, 13], [9, 11]];
   const ADJ = PROVS.map(() => []); for (const [a, b] of ROADS) { ADJ[a].push(b); ADJ[b].push(a); }
   const CAMP = 13;
-  const INCOME = (p) => p.cap ? 70 : p.camp ? 40 : 35;
+  const INCOME = (p) => p.cap ? 50 : p.camp ? 25 : 22; // slower gold: armies are dear
   const SUPPLY_CAP = 120;
   HB.KINGDOMS = KINGDOMS; HB.PROVS = PROVS; HB.ROADS = ROADS; HB.ADJ = ADJ; HB.INV = INV; HB.CAMP = CAMP;
 
@@ -49,9 +49,9 @@
       return { cmd: s.cmd || 'ai', name: s.name || k.name, ai: s.ai || (i === INV ? (rnd() < 0.5 ? 'gamedev' : 'remi') : ['remi', 'gamedev', 'steady'][(seed + i) % 3]) };
     });
     const st = { v: 3, seed, turn: 1, maxTurns: o.maxTurns || 24, phase: 'orders', seats,
-      owner: PROVS.map(p => p.k), gold: KINGDOMS.map((k, i) => i === INV ? 150 : 200), supply: KINGDOMS.map((k, i) => i === INV ? 78 : 90),
+      owner: PROVS.map(p => p.k), gold: KINGDOMS.map((k, i) => i === INV ? 150 : 200), supply: KINGDOMS.map((k, i) => i === INV ? 100 : 90),
       armies: [], nextId: 1, treaties: [], offers: [], nextOffer: 1, levies: [], oath: KINGDOMS.map(() => 0), venge: KINGDOMS.map(() => -1),
-      orders: {}, battles: [], log: [], over: false, winner: -1, envoys: [], last: null, coalition: [], intel: {}, grudge: {} };
+      orders: {}, battles: [], log: [], over: false, winner: -1, envoys: [], last: null, coalition: [], intel: {}, grudge: {}, blood: 0, betrayals: 0, fought: 0, wrathT: -99 };
     for (let k = 0; k < 5; k++) {
       const cap = PROVS.findIndex(p => p.k === k && p.cap);
       addArmy(st, k, cap, HB.draft(KINGDOMS[k].culture, 800, rnd));
@@ -170,7 +170,7 @@
           const vict = [0, 1, 2, 3, 4].filter(k => alive(st, k) && !friendly(st, f, k)).sort((x, y) => Math.min(...PROVS.map((p, i) => st.owner[i] === x ? dist(big.p)[i] : 99)) - Math.min(...PROVS.map((p, i) => st.owner[i] === y ? dist(big.p)[i] : 99)))[0];
           if (vict != null && !st.offers.some(o => o.from === f && o.to === vict) && rnd() < 0.6) {
             const land = PROVS.findIndex((p, i) => st.owner[i] === vict && !p.cap && ADJ[i].some(n => st.owner[n] === f));
-            out.push({ k: 'of', to: vict, kind: 'tribute', give: { gold: Math.min(400, Math.max(100, Math.round(st.gold[vict] * 0.6 / 10) * 10)), supply: 20 + Math.round(rnd() * 4) * 10, land, levy: rnd() < 0.5 ? 50 : 0 }, truce: 4 + Math.floor(rnd() * 5) });
+            out.push({ k: 'of', to: vict, kind: 'tribute', give: { gold: Math.min(400, Math.max(100, Math.round(st.gold[vict] * 0.6 / 10) * 10)), supply: 10 + Math.round(rnd() * 2) * 5, land, levy: rnd() < 0.5 ? 50 : 0 }, truce: 4 + Math.floor(rnd() * 5) });
           }
         }
       } else {
@@ -207,11 +207,16 @@
     // 3. simultaneous moves (and betrayals)
     const moves = [];
     for (let f = 0; f < 6; f++) for (const o of (st.orders[f] || [])) if (o.k === 'mv' && !(f === INV && st.turn === 1)) { // the Horde spends turn 1 crossing the mountains
-      const a = st.armies.find(x => x.id === o.a && x.f === f); if (validMove(st, a, o.to) && !moves.some(m => m.a === a)) moves.push({ a, to: o.to }); }
+      const a = st.armies.find(x => x.id === o.a && x.f === f); if (!a || moves.some(m => m.a === a)) continue;
+      // a march order names its destination; the army takes the next road toward it (multi-turn marches keep their destination)
+      const dest = o.d != null && o.d >= 0 && o.d < PROVS.length ? o.d : o.to;
+      const to = validMove(st, a, o.to) && (dest === o.to || dist(dest)[o.to] < dist(dest)[a.p]) ? o.to : dest !== a.p ? pathStep(a.p, dest) : -1;
+      if (validMove(st, a, to)) moves.push({ a, to, dest }); }
+    for (const a of st.armies) delete a.dest;
     for (const m of moves) {
       const own = st.owner[m.to], there = st.armies.filter(x => x.p === m.to && x.f !== m.a.f);
       for (const g of new Set(there.map(x => x.f).concat(own >= 0 && own !== m.a.f ? [own] : []))) if (friendly(st, m.a.f, g) && (there.some(x => x.f === g) || own === g) && (own === g)) betray(st, m.a.f, g);
-      m.a.p = m.to; m.a.moved = 1;
+      m.a.p = m.to; m.a.moved = 1; if (m.dest !== m.to) m.a.dest = m.dest;
     }
     for (let f = 0; f < 6; f++) for (const o of (st.orders[f] || [])) if (o.k === 'of') offer(st, f, o);
     for (let f = 0; f < 6; f++) { const o = (st.orders[f] || []).find(x => x.k === 'sp'); if (o) spy(st, f, o.to | 0); }
@@ -286,7 +291,7 @@
   }
   function betray(st, f, victim) {
     st.treaties = st.treaties.filter(t => t.key !== tKey(f, victim));
-    st.oath[f] = 1; st.venge[victim] = f; if (st.coalition) st.coalition = st.coalition.filter(m => m !== f);
+    st.oath[f] = 1; st.venge[victim] = f; st.betrayals = (st.betrayals || 0) + 1; if (st.coalition) st.coalition = st.coalition.filter(m => m !== f);
     log(st, `BETRAYAL! ${KINGDOMS[f].name} breaks its oath and attacks ${KINGDOMS[victim].name}. The gods mark the Oathbreaker.`, f);
   }
   function offer(st, f, o) {
@@ -306,6 +311,11 @@
     st.armies = keep;
   }
   // build the battle match for a campaign battle; humanSides lists campaign factions played by people
+  // Gods' Wrath is a campaign-scale event: only after many battles (8+, turn 7+), a sea of blood (7000 dead, or 4500 and a betrayal), and not again for 10 turns
+  function wrathReady(st) {
+    const blood = st.blood || 0, bet = st.betrayals || 0;
+    return (st.fought || 0) >= 8 && st.turn >= 7 && st.turn - (st.wrathT == null ? -99 : st.wrathT) >= 10 && (blood >= 7000 || (bet >= 1 && blood >= 4500));
+  }
   function battleMatch(st, bt, cmdOf) {
     const p = PROVS[bt.p];
     const sides = bt.sides.map(f => {
@@ -320,7 +330,7 @@
     const title = bt.siege ? (p.camp ? 'Assault on the ' + p.name : 'Siege of ' + p.name) : 'Battle of ' + p.name;
     const weather = ['clear', 'clear', 'rain', 'fog', 'clear', 'wind'][bt.seed % 6];
     const terrain = p.hills ? 'hills' : ['open', 'river', 'woods', 'hills', 'river'][bt.seed % 5];
-    const m = HB.makeMatch({ seed: bt.seed, sides, title, weather, terrain: bt.siege ? 'siege' : terrain, tmax: bt.siege ? 420 : 300,
+    const m = HB.makeMatch({ seed: bt.seed, sides, title, weather, terrain: bt.siege ? 'siege' : terrain, tmax: bt.siege ? 420 : 300, wrath: wrathReady(st),
       siege: bt.siege ? { def: 0, rings: p.camp ? 2 : 3, name: p.name, relief: reliefFor(st, bt) } : null });
     m.cf = sides.map(s => s.cf);
     return m;
@@ -338,12 +348,12 @@
   }
   // map a finished battle back onto campaign armies: per side survivors (hp per pick), winner faction
   function battleResult(st, bt, m, b) {
-    const res = { winner: b.winner >= 0 && b.winner < m.cf.length ? m.cf[b.winner] : -1, hp: {}, t: Math.round(b.t), siege: b.siegeResult || '', title: m.title };
+    const res = { winner: b.winner >= 0 && b.winner < m.cf.length ? m.cf[b.winner] : -1, wrath: b.wrathDone || !!b.wrath ? 1 : 0, hp: {}, t: Math.round(b.t), siege: b.siegeResult || '', title: m.title };
     m.sides.forEach((s, i) => {
       const regs = b.regs.filter(r => r.side === i && !r.relief);
       const hp = s.picks.map(() => 0);
       s.army.forEach((e, k) => { const r = regs[k]; if (!r || e.pi == null) return; const alive = r.st === 2 || r.n <= 0.5 ? 0 : r.n / r.n0 * 100 * (r.st === 1 ? 0.7 : 1); hp[e.pi] = Math.round(alive); });
-      res.hp[s.cf] = hp;
+      res.hp[m.cf[i]] = hp; // m.sides come from makeMatch (no cf field): key by the campaign faction list
     });
     if (bt.siege && m.siege.relief) { const rl = b.regs.filter(r => r.side === 0 && r.relief); res.relief = { id: m.siege.relief.from, hp: rl.map(r => r.st === 2 ? 0 : Math.round(r.n / r.n0 * 100)) }; }
     return res;
@@ -352,6 +362,10 @@
     if (bt.done) return;
     bt.done = true; bt.res = { winner: res.winner, t: res.t, siege: res.siege };
     const p = bt.p;
+    st.fought = (st.fought || 0) + 1; if (res.wrath) { st.wrathT = st.turn; log(st, `The gods walked the field at ${PROVS[p].name}.`, -1); }
+    for (const f of bt.sides) { const a = st.armies.find(x => x.f === f && x.p === p), hp = res.hp[f]; if (!a || !hp) continue; // count the dead toward the gods' anger
+      a.picks.forEach((ix, i) => { const T = HB.TYPES[fac(f).roster[ix].t]; st.blood = (st.blood || 0) + Math.max(0, (a.hp[i] - (hp[i] != null ? hp[i] : a.hp[i])) / 100 * T.men); }); }
+    st.blood = Math.round(st.blood || 0);
     for (const f of bt.sides) {
       const a = st.armies.find(x => x.f === f && x.p === p); if (!a) continue;
       const hp = res.hp[f] || [];
@@ -378,20 +392,23 @@
       if (fs.length === 1 && st.owner[p] !== fs[0] && !(st.owner[p] >= 0 && friendly(st, fs[0], st.owner[p]))) {
         const prev = st.owner[p]; st.owner[p] = fs[0];
         log(st, `${KINGDOMS[fs[0]].name} takes ${PROVS[p].name}${prev >= 0 ? ' from ' + KINGDOMS[prev].name : ''}.`, fs[0]);
-        if (fs[0] === INV) { st.supply[INV] = Math.min(SUPPLY_CAP, st.supply[INV] + 25); st.gold[INV] += PROVS[p].cap ? 200 : 60; log(st, `The Horde plunders ${PROVS[p].name}.`, INV); }
+        if (fs[0] === INV && !((st.plundered = st.plundered || {})[p] > st.turn - 8)) { st.plundered[p] = st.turn; st.supply[INV] = Math.min(SUPPLY_CAP, st.supply[INV] + (PROVS[p].cap ? 35 : 20)); st.gold[INV] += PROVS[p].cap ? 120 : 40; log(st, `The Horde plunders ${PROVS[p].name}.`, INV); } // a province can only be stripped once in a while
       }
     }
     // economy and supply
-    const campD = dist(CAMP, (n) => st.owner[n] === INV);
+    // Horde supply clock: every army eats each turn, more the further it is from land the Horde holds;
+    // the camp only trickles. Real resupply = conquest (plunder) and armies resting a turn in held land.
+    const held = PROVS.map((_, i) => i).filter(i => st.owner[i] === INV);
+    const fromHeld = PROVS.map((_, p) => held.length ? Math.min(...held.map(h => dist(h)[p])) : 6);
     for (let f = 0; f < 6; f++) {
       let inc = 0; st.owner.forEach((o, i) => { if (o === f) inc += INCOME(PROVS[i]); });
-      st.gold[f] += inc;
+      st.gold[f] += f === INV ? Math.round(inc * 0.6) : inc; // occupied land yields little coin
       let up = 0;
       for (const a of st.armies.filter(a => a.f === f)) {
-        if (f === INV) up += 3 + Math.min(8, campD[a.p] === 99 ? 8 : campD[a.p]) * 2 + Math.round(a.picks.length / 3);
+        if (f === INV) up += 6 + Math.round(a.picks.length / 2) + Math.min(5, fromHeld[a.p]) * 4 - (!a.moved && st.owner[a.p] === INV ? 4 : 0);
         else up += st.owner[a.p] === f ? 1 : 4;
       }
-      const sinc = f === INV ? (st.owner[CAMP] === INV ? 14 : 0) + st.owner.filter((o, i) => o === f && i !== CAMP).length * 3 : 4 + st.owner.filter(o => o === f).length * 3;
+      const sinc = f === INV ? (st.owner[CAMP] === INV ? 4 : 0) + held.filter(i => i !== CAMP).length : 4 + st.owner.filter(o => o === f).length * 3;
       const raid = f === INV && st.coalition && st.coalition.length >= 2 ? 3 * st.coalition.filter(m => alive(st, m)).length : 0; // coalition riders harry the wagons
       st.supply[f] = Math.min(SUPPLY_CAP, st.supply[f] + sinc - up - raid);
       if (st.supply[f] < 0) { // starvation
@@ -399,7 +416,7 @@
         log(st, `${KINGDOMS[f].name} is starving: the supply line is too long.`, f); st.supply[f] = 0;
       }
       // armies recover a little in their own land
-      for (const a of st.armies.filter(a => a.f === f && st.owner[a.p] === f)) a.hp = a.hp.map(h => Math.min(100, h + 10));
+      for (const a of st.armies.filter(a => a.f === f && st.owner[a.p] === f)) a.hp = a.hp.map(h => Math.min(100, h + (f === INV ? (a.moved ? 6 : 15) : (a.moved ? 12 : 25)))); // resting armies recover faster; the Horde is far from home
     }
     // levies arrive
     for (const l of st.levies.filter(l => l.at <= st.turn + 1)) {

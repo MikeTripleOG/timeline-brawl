@@ -188,6 +188,51 @@ function arrowTest(form) {
   check('campaign: AI campaigns finish with a winner', ok, lines.join('; '));
   check('campaign: turn resolution is deterministic across a JSON round trip', det, 'host and guest copies hash identically every turn');
 }
+// 15. Multi-turn marches go where the player ordered, along the drawn path (bug: "march on Vellorien" went to Ashen Pass and stopped)
+{
+  const C = HB.Campaign, INV = C.INV, P = HB.PROVS, V = P.findIndex(p => p.name === 'Vellorien');
+  const lines = []; let ok = true;
+  for (const start of [C.CAMP, P.findIndex(p => p.name === 'Eastern Hills'), P.findIndex(p => p.name === 'Ashen Pass')]) {
+    const st = C.create({ seed: 5, seats: HB.KINGDOMS.map(() => ({ cmd: 'human' })) });
+    const a = st.armies.find(x => x.f === INV); a.p = start; for (const o of st.armies) if (o !== a && o.p === start) o.p = C.CAMP === start ? 11 : C.CAMP;
+    for (let f = 0; f < 6; f++) C.submit(st, f, []); C.resolve(st); // turn 1: the Horde is still crossing the mountains
+    const want = [start]; { let p = start; while (p !== V) { p = C.pathStep(p, V); want.push(p); } }
+    const went = [start]; let t = 0, arrived = false, bogus = false;
+    while (t++ < 6 && !arrived) {
+      const ords = a.dest != null || t === 1 ? [{ k: 'mv', a: a.id, to: t === 1 ? (start === C.CAMP ? 12 : C.pathStep(start, V)) : C.pathStep(a.p, a.dest), d: V }] : [];
+      for (let f = 0; f < 6; f++) C.submit(st, f, f === INV ? ords : []);
+      C.resolve(st);
+      const bt = (st.battles || []).find(b => !b.done && b.sides.includes(INV));
+      const at = bt ? bt.p : a.p; if (went[went.length - 1] !== at) went.push(at);
+      if (at === V) arrived = true;
+      if (st.phase === 'battles') for (const b of st.battles.filter(b => !b.done)) C.finishBattle(st, b, C.autoResolve(st, b));
+      if (!st.armies.includes(a)) break;
+      if (!arrived && a.dest !== V) bogus = true;
+    }
+    const good = arrived && !bogus && went.every((p, i) => i === 0 || HB.ADJ[went[i - 1]].includes(p)) && went.length === want.length;
+    ok = ok && good; lines.push(`${P[start].name} → Vellorien: ${went.map(p => P[p].name).join(' → ')} in ${went.length - 1} turn(s)${good ? '' : ' (WRONG)'}`);
+  }
+  check('campaign: a march order reaches the ordered province along the path', ok, lines.join('; '));
+}
+// 16. The Gods' Wrath is rare and late: never in quick battles, never in a campaign's first battles, never before the battle's second half
+{
+  const lines = []; let ok = true;
+  const m = HB.makeMatch({ seed: 9, sides: [{ faction: 'rome' }, { faction: 'carthage' }] }); const b = HB.battleFor(m); while (!b.over) b.step();
+  ok = ok && !b.wrath && !b.wrathDone; lines.push(`quick battle: ${Math.round(b.bloodshed)} bloodshed, wrath ${b.wrathDone ? 'YES' : 'no'}`);
+  const m2 = HB.makeMatch({ seed: 9, wrath: 1, sides: [{ faction: 'rome' }, { faction: 'carthage' }] }); const b2 = HB.battleFor(m2); let tW = -1; while (!b2.over) { b2.step(); if (tW < 0 && b2.wrath) tW = b2.t; }
+  ok = ok && (tW < 0 || tW >= b2.tmax * 0.5); lines.push(`battle with the gods stirred: wrath ${tW < 0 ? 'did not come' : 'at ' + tW.toFixed(0) + 's of ' + b2.tmax + 's'}`);
+  const C = HB.Campaign; let first = 99, n = 0, games = 0, withW = 0;
+  for (const seed of [1, 2, 3, 4, 5, 6]) {
+    const st = C.create({ seed, seats: HB.KINGDOMS.map(() => ({ cmd: 'ai' })) }); let g = 0; games++;
+    const w = []; let wt = st.wrathT; const seen = () => { if (st.wrathT !== wt) { wt = st.wrathT; w.push(wt); } };
+    while (!st.over && g++ < 300) { if (st.phase === 'orders') { C.resolve(st); seen(); } if (st.phase === 'battles') for (const bt of st.battles.filter(b => !b.done)) { C.finishBattle(st, bt, C.autoResolve(st, bt)); seen(); } }
+    n += w.length; if (w.length) withW++;
+    for (const t of w) { first = Math.min(first, t); ok = ok && t >= 7; }
+    ok = ok && w.length <= 2;
+  }
+  lines.push(`${games} full AI campaigns: the gods walked ${n} time(s) in ${withW} campaign(s), earliest on turn ${first === 99 ? '—' : first} (never before turn 7, at most twice a war)`);
+  check('Gods\' Wrath is gated: rare, late, earned by campaign bloodshed', ok, lines.join('; '));
+}
 console.log(results.join('\n'));
 console.log(fails ? fails + ' FAILED' : 'ALL PASS');
 process.exit(fails ? 1 : 0);

@@ -19,6 +19,7 @@ async function until(f, ms, step = 250) { const t0 = Date.now(); while (Date.now
   const code = await until(() => A.evaluate(() => __tb.CP.online && __tb.CP.online.code), 5000);
   console.log('room', code, 'relay', MODE);
   ok(await until(() => A.evaluate(() => /Room open/.test(__tb.CP.online.status)), 15000), 'host opens a room on the relay');
+  ok(await A.isVisible('#roomCode') && (await A.textContent('#roomCode')).trim() === code && await A.isVisible('[data-a=copy]') && /#room=/.test(await A.textContent('#roomLink')), 'host sees the room code, the link and a Copy link button');
   let B = await cB.newPage(); watch(B, 'guest');
   await B.goto(url + '#room=' + code); await sleep(300);
   await B.evaluate(() => { __tb.HB.Net.rate = 4; });

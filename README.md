@@ -15,9 +15,11 @@ A war-table strategy game set before gunpowder, played in the browser. Rule one 
 - **Custom battle:** pick both cultures, the enemy commander and the budget. Battlefields are open field, river and fords, hills, forest and village, **Siege: attack** and **Siege: defend**. You can also paste an army code.
 
 ## Controls (tap-first)
+Every player battle opens with a **DEPLOY** phase. The camera is framed close on your army, nothing moves and the clock is stopped. Drag regiments anywhere inside the gold zone, swipe to face, and set formations, then press **⚔ Start battle**. Online lockstep battles and replays skip deployment, and the clock waits until the intro banner clears. Each block carries a unit-type badge: pike, sword and shield, bow, horse archer, horse, chariot, elephant or siege.
+
 | Gesture | Effect |
 |---|---|
-| Tap your regiment | Select it. Tap it again for the **formation ring**, which offers 2–4 medallions. |
+| Tap your regiment | Select it. Tap it again (or long-press it) for the **formation ring**: 2–4 large medallions in a row clear of the unit. |
 | Drag from your regiment | Move there. The drag direction sets its facing. Drop it on an enemy to attack. |
 | Swipe with a regiment selected | Turn to face that way. |
 | Tap an enemy | Attack it. |
@@ -57,7 +59,7 @@ Every culture can also field siege engines: battering ram, siege tower and trebu
   - Elephants panic under javelins and skirmishers and trample their own side.
 - **Mythic layer:**
   - **Faith** builds over the battle and pays for lore abilities and the **Curse**.
-  - **Gods' Wrath** comes when too much blood is spilled: a Titan or a Dragon descends. Every army is held under a forced truce until it falls or leaves, and the side that fought it hardest is rewarded.
+  - **Gods' Wrath** is rare and late. It never comes in quick battles or a campaign's first battles. The gods only stir after 8+ battles, from turn 7, once the war has spilled about 7000 men (or 4500 plus a betrayal), and then not again for 10 turns. Even then, a Titan only walks into the second half of a bloody battle. It forces a truce until it falls, and the side that fought it hardest is rewarded.
 - **Free-for-all diplomacy:** alliances, betrayal (OATHBREAKER) and Vengeance for the victim.
 - **Sieges:**
   - Walls come in rings (outer, inner, keep). Breaching one ring moves the fight inward.
@@ -79,7 +81,9 @@ Every culture can also field siege engines: battering ram, siege tower and trebu
 | Drakonia | red | Rome |
 
 - **The Crimson Horde (Mongols)** invades from the east under a dragon banner. Its supply wagons follow a dotted red supply line.
-  - **Supply clock:** every Horde army eats supply, and the further it is from the camp, the more it eats. Below zero the Horde starves and its armies bleed. The Horde gets a fresh tumen every 3 turns while it holds its camp.
+  - **Supply clock:** every Horde army eats about 6 + size/2 supply a turn, plus 4 for each province it stands beyond Horde-held land. Resting in held land refunds only 4. The camp and held provinces trickle a little back. A stalled Horde loses about 12–14 a turn (100 → 0 by turn 9). Below zero it starves and its armies bleed. **Conquest** is the real resupply: plundering a province gives +20 (+35 for a capital), but the same province can only be stripped once every 8 turns. The Horde gets a fresh tumen every 3 turns while it holds its camp.
+- **Marching:** tap any reachable province, including a kingdom's banner plate, and the army marches there by road over several turns. The full route is drawn, and the order carries over each turn until the army arrives.
+- **Attrition:** battle losses stay with the army. Armies heal in their own land, faster when resting, and the Horde heals more slowly.
 - **Each turn:** march, recruit (gold and SUPPLY), and send envoys. Envoys offer alliance, truce, tribute or (between kingdoms) the **Coalition**, and terms can include gold, supply, land, levies and truce length.
   - **Tribute and the Janissary levy:** the Horde demands tribute, often with a *Janissary levy* of recruits who join its army three turns later.
   - **Spies (60 gold):** a 70% chance of a 3-turn report on the target's gold, supply and armies. Against the Horde, a spy also burns 20 supply. A caught spy closes that court to your envoys for 3 turns.

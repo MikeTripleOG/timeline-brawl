@@ -22,19 +22,37 @@ let pass = 0, fail = 0; const ok = (c, m) => { if (c) { pass++; console.log('  â
   console.log('quick battle (tap-first controls)');
   await pg.click('#bQuick'); await pg.waitForTimeout(800);
   ok(await ev(() => __tb.screen()) === 'battle', 'one tap starts a battle');
-  await ev(() => { __tb.R.userCam = 99; __tb.R.fit(true); });
-  const r0 = await ev(() => { const b = __tb.BR.b, r = b.regs.find(r => r.side === 0 && r.def.cls === 'inf'); const p = __tb.R.toScreen(r.x, r.y); return { id: r.id, x: p.x, y: p.y }; });
+  // deploy phase: frozen clock, camera framed close on my army, Start button
+  ok(await ev(() => __tb.BR.deploy) && await pg.isVisible('#bStart'), 'battle opens in a DEPLOY phase with a Start button');
+  const z0 = await ev(() => ({ z: __tb.R.cam.z, fit: __tb.R.fitZ() }));
+  ok(z0.z >= z0.fit * 1.5, 'camera starts close on my army (zoom ' + (z0.z / z0.fit).toFixed(2) + 'Ã— the full-field view)');
+  await pg.waitForTimeout(1500);
+  ok(await ev(() => __tb.BR.b.t) === 0, 'the clock and the enemy stay still while deploying');
+  const icons = await ev(() => [...new Set(__tb.BR.b.regs.map(r => __tb.HB.iconOf(r)))]);
+  ok(icons.length >= 3 && icons.every(k => ['pike', 'sword', 'bow', 'hbow', 'horse', 'chariot', 'ele', 'siege'].includes(k)), 'every block carries a unit-type icon (' + icons.join(', ') + ')');
+  const r0 = await ev(() => { const b = __tb.BR.b, r = b.regs.find(r => r.side === 0 && r.def.cls === 'inf'); const p = __tb.R.toScreen(r.x, r.y); return { id: r.id, x: p.x, y: p.y, wx: r.x, wy: r.y }; });
   await tapAt(r0.x, r0.y);
-  ok(await ev(() => __tb.BR.sel) === r0.id, 'tap selects a regiment');
-  await drag(r0.x, r0.y, r0.x + 30, r0.y - 90);
+  ok(await ev(() => __tb.BR.sel) === r0.id && !(await ev(() => __tb.R.ringOpen)), 'first tap selects a regiment (no ring yet)');
+  await tapAt(r0.x, r0.y); await pg.waitForTimeout(100);
+  const ring = await ev(() => __tb.R.ring && __tb.R.ring.items.map(i => ({ x: i.x, y: i.y, k: i.o.k, m: i.o.m, on: i.o.on })));
+  ok(ring && ring.length >= 2 && ring.length <= 4, 'second tap opens the formation ring with 2â€“4 options (' + (ring ? ring.length : 0) + ')');
+  const cover = ring && Math.min(...ring.map(o => Math.hypot(o.x - r0.x, o.y - r0.y)));
+  ok(cover > 50, 'the ring sits clear of the unit (nearest medallion ' + Math.round(cover) + ' px away)');
+  const alt = ring && ring.find(o => o.k === 'fm' && !o.on);
+  if (alt) { await tapAt(alt.x, alt.y); await pg.waitForTimeout(150); ok(await ev((id) => __tb.BR.b.regs[id].form, r0.id) === alt.m, 'tapping a medallion sets the deployment formation to ' + alt.m); }
+  await drag(r0.x, r0.y, r0.x + 40, r0.y - 400); await pg.waitForTimeout(100);
+  const dp = await ev((id) => { const r = __tb.BR.b.regs[id], z = __tb.BR.b.zones[0]; return { x: r.x, y: r.y, inZone: r.y >= z.y0 && r.y <= z.y1 && r.x >= z.x0 && r.x <= z.x1, t: __tb.BR.b.t }; }, r0.id);
+  ok(dp.inZone && Math.abs(dp.y - r0.wy) > 5 && dp.t === 0, 'dragging during deploy repositions the regiment, clamped to the deployment zone');
+  await pg.click('#bStart'); await pg.waitForTimeout(400);
+  const st0 = await ev((id) => ({ dep: __tb.BR.deploy, form: __tb.BR.b.regs[id].form, y: __tb.BR.b.regs[id].y, t: __tb.BR.b.t }), r0.id);
+  ok(!st0.dep && Math.abs(st0.y - dp.y) < 8 && (!alt || st0.form === alt.m), 'Start begins the battle with the deployed positions and formations (clock ' + st0.t.toFixed(1) + 's, y ' + dp.y.toFixed(0) + 'â†’' + st0.y.toFixed(0) + ', ' + st0.form + ')');
+  await ev(() => { __tb.R.userCam = 99; __tb.R.fit(true); });
+  const r1 = await ev((id) => { const r = __tb.BR.b.regs[id]; const p = __tb.R.toScreen(r.x, r.y); return { id, x: p.x, y: p.y }; }, r0.id);
+  await tapAt(r1.x + 300, r1.y + 300); await tapAt(r1.x, r1.y);
+  await drag(r1.x, r1.y, r1.x + 30, r1.y - 90);
   await pg.waitForTimeout(150);
   const ord = await ev((id) => { const r = __tb.BR.b.regs[id]; return r.order; }, r0.id);
   ok(ord && ord.k === 'mv' && ord.f != null, 'drag issues a move with facing');
-  // tap the selected regiment's ring medallion to change formation
-  const ring = await ev(() => __tb.R.ring && __tb.R.ring.items.map(i => ({ x: i.x, y: i.y, k: i.o.k, m: i.o.m, on: i.o.on })));
-  ok(ring && ring.length >= 2 && ring.length <= 4, 'formation ring shows 2â€“4 options (' + (ring ? ring.length : 0) + ')');
-  const alt = ring && ring.find(o => o.k === 'fm' && !o.on);
-  if (alt) { await tapAt(alt.x, alt.y); await pg.waitForTimeout(150); ok(await ev((id) => __tb.BR.b.regs[id].form, r0.id) === alt.m, 'tapping a medallion switches formation to ' + alt.m); }
   // tap an enemy to attack
   const en = await ev(() => { const b = __tb.BR.b, r = b.regs.find(r => r.side === 1 && r.st === 0); const p = __tb.R.toScreen(r.x, r.y); return { id: r.id, x: p.x, y: p.y }; });
   await tapAt(en.x, en.y); await pg.waitForTimeout(120);
@@ -62,6 +80,7 @@ let pass = 0, fail = 0; const ok = (c, m) => { if (c) { pass++; console.log('  â
   await pg.click('#bCustom'); await pg.click('[data-a=field][data-v=siegeA]'); await pg.click('[data-a=go]'); await pg.waitForTimeout(1000);
   ok(await ev(() => !!__tb.BR.b.S && __tb.BR.b.S.segs.length > 20), 'siege battle has walls in rings (' + await ev(() => __tb.BR.b.S.segs.length) + ' segments)');
   ok(await pg.isVisible('text=Walls'), 'siege HUD shows wall integrity');
+  await pg.click('#bStart'); await pg.waitForTimeout(200);
   // tap the trebuchet then a wall segment = wall order
   const tre = await ev(() => { __tb.R.userCam = 99; __tb.R.fit(true); const b = __tb.BR.b, r = b.regs.find(r => r.side === 1 && r.def.wall > 0 && r.def.rng > 0) || b.regs.find(r => r.side === 1 && r.def.cls === 'sie'); const p = __tb.R.toScreen(r.x, r.y); const s = b.S.segs.filter(s => s.ring === 0 && !s.gate).sort((a, c) => Math.hypot(a.mx - r.x, a.my - r.y) - Math.hypot(c.mx - r.x, c.my - r.y))[0]; const q = __tb.R.toScreen(s.mx, s.my); return { id: r.id, x: p.x, y: p.y, sx: q.x, sy: q.y, sid: s.id }; });
   await tapAt(tre.x, tre.y); await tapAt(tre.sx, tre.sy); await pg.waitForTimeout(150);
@@ -90,6 +109,12 @@ let pass = 0, fail = 0; const ok = (c, m) => { if (c) { pass++; console.log('  â
   const dest = await ev(() => { const P = __tb.HB.PROVS; const p = __tb.MV.toScreen(P[1].x, P[1].y + 15); return p; });
   await tapAt(dest.x, dest.y);
   ok(await ev(() => __tb.MV.arrows.length) === 1, 'tap a neighbouring province: march arrow');
+  // tap the Vellorien banner plate: the order targets Vellorien itself (3 turns by road), not a province under the plate
+  await tapAt(a.x, a.y);
+  const vp = await ev(() => { const pl = __tb.MV.plates.find(p => __tb.HB.PROVS[p.p].name === 'Vellorien'); __tb.MV.center(pl.p); const s = __tb.MV.toScreen(pl.x, pl.y); return s; });
+  await tapAt(vp.x, vp.y); await pg.waitForTimeout(150);
+  const vd = await ev((id) => ({ d: __tb.CP.draft.mv[id], n: __tb.MV.arrows.length }), a.id);
+  ok(vd.d === 6 && vd.n === 3, 'tap the Vellorien plate: march on Vellorien itself, drawn over ' + vd.n + ' hops (dest ' + vd.d + ')');
   await pg.screenshot({ path: SHOTS + '/e2e-map.png' });
   // envoy: compose a tribute treaty
   await pg.click('#bDiplo'); await pg.click('[data-a=env][data-i="0"]'); await pg.waitForTimeout(200);

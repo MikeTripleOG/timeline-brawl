@@ -145,7 +145,7 @@
         this.spawnArmy(s, o.armies[s] || []);
       }
       this.men0 = this.regs.reduce((a, r) => a + r.n0, 0);
-      this.deaths = 0; this.bloodshed = 0; this.wrath = null; this.wrathDone = false; this.curses = 0;
+      this.deaths = 0; this.bloodshed = 0; this.wrath = null; this.wrathDone = false; this.curses = 0; this.wrathOk = !!o.wrath; // the gods only stir when the campaign has earned it
       this.fogs = []; this.winds = []; this.events = []; this.diplo = []; this.allyWinT = 0;
       this.ai = HB.makeAI ? this.fac.map((f, s) => HB.makeAI(this, s)) : [];
       this.stats = { abilities: 0, charges: 0, rearCharges: 0, flankHits: 0, routs: 0, rallies: 0 };
@@ -153,11 +153,13 @@
     // entries: [{t: rosterIndex | type, x, y, f?}] using the side's faction roster
     spawnArmy(s, entries) {
       const fac = HB.FACTION[this.fac[s].faction] || HB.FACTIONS[0], z = this.zones[s];
-      for (const e of entries) {
+      entries.forEach((e, ei) => {
         const ro = typeof e.r === 'number' ? fac.roster[e.r] : null;
         const r = this.addReg(s, ro ? ro.t : e.t, ro, e.x, e.y, e.f != null ? e.f : z.f);
         if (e.h != null && e.h < 100) { r.n = Math.max(1, Math.round(r.n0 * e.h / 100)); geom(r); }
-      }
+        if (e.m && r.def.forms.includes(e.m)) { r.form = e.m; geom(r); } // formation chosen during deployment
+        r.ei = ei; // index of the army entry this regiment came from (deployment writes back to it)
+      });
     }
     addReg(side, type, ro, x, y, f) {
       const base = HB.TYPES[type], m = (ro && ro.m) || {};
@@ -722,7 +724,7 @@
       for (const w of this.winds) w.T -= 1; this.winds = this.winds.filter(w => w.T > 0);
       // Gods' Wrath: too much blood (and betrayal) angers the gods
       this.bloodshed = Math.min(100, this.deaths / (this.men0 * 0.42) * 100 + this.diplo.filter(d => d.type === 'betray').length * 22 + this.curses * 3);
-      if (!this.wrath && !this.wrathDone && this.bloodshed >= 100 && this.t > 30) this.startWrath();
+      if (this.wrathOk && !this.wrath && !this.wrathDone && this.bloodshed >= 100 && this.t > this.tmax * 0.5) this.startWrath(); // rare and late: never early in a battle
       if (this.wrath) { this.wrath.T -= 1; if (this.wrath.T <= 0 || (this.wrath.mon && this.wrath.mon.hp <= 0)) this.endWrath(); }
     }
     faithCost(r) { const L = HB.LORE[r.lore]; return L ? L.cost * (this.fac[r.side].oath ? 2 : 1) : 0; }
@@ -841,7 +843,7 @@
 
     // ---------- Gods' Wrath ----------
     startWrath() {
-      const kind = this.rand() < 0.5 ? 'titan' : 'dragon';
+      const kind = 'titan'; // no flying units: the wrath walks
       const mon = this.addReg(MON, kind, null, W / 2, kind === 'dragon' ? 60 : H / 2, HPI);
       mon.name = kind === 'titan' ? 'The Titan' : 'The Dragon'; mon.n = mon.n0 = 1;
       const saved = Array.from(this.hos);
@@ -851,7 +853,7 @@
       this.wrath = { kind, T: 45, dur: 45, mon, saved, atkT: 3 };
       for (const f of this.fac) f.msDmg = 0;
       this.events.push('wrath');
-      this.emit({ k: 'event', id: 'wrath', kind, text: "GODS' WRATH", sub: (kind === 'titan' ? 'A Titan walks' : 'A Dragon descends') + '. Too much blood was spilled: every army is under truce until it is gone.', big: true });
+      this.emit({ k: 'event', id: 'wrath', kind, text: "GODS' WRATH", sub: 'A Titan walks. Too much blood was spilled: every army is under truce until it is gone.', big: true });
     }
     monsterThink() {
       const w = this.wrath, m = w.mon; if (m.st === 2) return;

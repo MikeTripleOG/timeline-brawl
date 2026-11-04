@@ -193,7 +193,7 @@
       // order arrows
       for (const a of this.arrows) this.arrow(g, P[a.from], P[a.to], a.col || '#f5cf5a');
       // name plates over each kingdom's capital (current owner's crest)
-      for (let k = 0; k < 5; k++) { const capP = P.findIndex(p => p.k === k && p.cap); this.plate(g, P[capP].x, P[capP].y - 62, K[k].name, K[k], st.owner[capP] !== k ? st.owner[capP] : -1); }
+      this.plates = []; for (let k = 0; k < 5; k++) { const capP = P.findIndex(p => p.k === k && p.cap); this.plates.push({ p: capP, x: P[capP].x, y: P[capP].y - 62, w: K[k].name.length * 12 + 70 }); this.plate(g, P[capP].x, P[capP].y - 62, K[k].name, K[k], st.owner[capP] !== k ? st.owner[capP] : -1); }
       // province labels
       g.textAlign = 'center'; g.textBaseline = 'middle';
       P.forEach((p, i) => { if (p.cap && p.k < 5) return; g.font = '600 13px ' + FONT; g.lineWidth = 3; g.strokeStyle = 'rgba(240,225,190,0.85)'; g.strokeText(p.name, p.x, p.y + 30); g.fillStyle = '#3a2410'; g.fillText(p.name, p.x, p.y + 30); });
@@ -261,8 +261,12 @@
       const byP = {}; for (const a of st.armies) (byP[a.p] = byP[a.p] || []).push(a);
       let army = null, bd = 30;
       for (const p in byP) byP[p].forEach((a, j) => { const x = P[a.p].x + (j - (byP[p].length - 1) / 2) * 40, y = P[a.p].y - 10; const d = Math.hypot(w.x - x, w.y - y); if (d < bd) { bd = d; army = a; } });
-      let prov = -1; const cx = Math.floor(w.x / CELL), cy = Math.floor(w.y / CELL);
-      if (cx >= 0 && cy >= 0 && cx < GX && cy < GY) prov = this.cellProv[cy * GX + cx];
+      // what the player sees decides the target: a kingdom's name plate or a settlement (icon + name) beats the painted border cells
+      let prov = -1;
+      for (const pl of (this.plates || [])) if (Math.abs(w.x - pl.x) < pl.w / 2 + 12 && Math.abs(w.y - pl.y) < 18) prov = pl.p;
+      if (prov < 0) { let sd = 40; P.forEach((p, i) => { const d = Math.min(Math.hypot(w.x - p.x, w.y - p.y), Math.hypot((w.x - p.x) * 0.6, w.y - p.y - 30)); if (d < sd) { sd = d; prov = i; } }); }
+      const cx = Math.floor(w.x / CELL), cy = Math.floor(w.y / CELL);
+      if (prov < 0 && cx >= 0 && cy >= 0 && cx < GX && cy < GY) prov = this.cellProv[cy * GX + cx];
       return { army, prov, w };
     }
   }

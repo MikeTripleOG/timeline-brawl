@@ -52,9 +52,11 @@
     const ctl = o.ctl || [];
     m.sides.forEach((s, i) => { if (ctl.includes(i)) s.cmd = 'human'; });
     const b = o.watch ? HB.battleFor(m, { cmds: o.watch }) : HB.battleFor(m, o.lock ? { net: true } : null);
-    Object.assign(BR, { b, m, ctl, me: ctl.length ? ctl[0] : 0, spectate: !ctl.length, speed: 1, acc: 0, sel: null, armed: false, onEnd: o.onEnd || null, lock: o.lock || null, endT: 0, hudT: 0, drag: null, turn: o.turn || 0, tipT: 0, seen: {}, watch: !!o.watch, title: m.title });
+    Object.assign(BR, { b, m, ctl, me: ctl.length ? ctl[0] : 0, spectate: !ctl.length, speed: 1, acc: 0, sel: null, armed: false, onEnd: o.onEnd || null, lock: o.lock || null, endT: 0, hudT: 0, drag: null, turn: o.turn || 0, tipT: 0, seen: {}, watch: !!o.watch, title: m.title,
+      deploy: !!ctl.length && !o.lock && !o.watch, introT: 3.2 }); // deploy: sim frozen until Start; introT: clock held while the banner shows
     if (o.lock) o.lock.attach(b, () => HB.battleFor(m, { net: true }));
-    R.setBattle(b, battleColors(m, ctl, !ctl.length), BR.me); R.sel = null;
+    R.setBattle(b, battleColors(m, ctl, !ctl.length), BR.me); R.sel = null; R.ringOpen = false;
+    if (ctl.length && R.frameOn) R.frameOn(BR.me, true);
     $('bTitle').textContent = m.title || (m.siege ? 'Siege of ' + m.siege.name : HB.FACTION[m.sides[0].faction].name + ' vs ' + HB.FACTION[m.sides[1].faction].name);
     $('bCurse').style.display = ctl.length ? '' : 'none';
     $('bAuto').style.display = ctl.length ? '' : 'none';
@@ -64,8 +66,9 @@
     show('battle');
     const intro = m.siege ? (m.siege.def === BR.me && ctl.length ? 'Hold the walls. Man the towers, plug the breaches, sally against their engines.' : 'Batter the gate with the ram, roll the tower to a wall, let the trebuchet open a breach — then take the keep.')
       : 'Tap a regiment, drag it to move, tap an enemy to attack. Pike beats horse, horse beats bow, bow beats slow foot.';
-    banner(m.title || 'Battle', ctl.length ? intro : 'Spectating — ' + m.sides.map(s => s.name).join(' vs '), 3.2);
-    tip(ctl.length ? 'Tap your regiment again for its formation ring. Swipe on open ground to turn it.' : 'Pinch to zoom. The camera follows the fighting.');
+    $('bStart').style.display = BR.deploy ? '' : 'none';
+    if (BR.deploy) { banner('Deploy — ' + (m.title || 'Battle'), 'Drag regiments inside the gold zone, swipe to face, tap twice for formations. Press Start when ready.', 4.5); tip(intro); }
+    else { banner(m.title || 'Battle', ctl.length ? intro : 'Spectating — ' + m.sides.map(s => s.name).join(' vs '), 3.2); tip(ctl.length ? 'Tap a regiment twice (or hold it) for its formation ring. Swipe on open ground to turn it.' : 'Pinch to zoom. The camera follows the fighting.'); }
     sfx('horn');
   }
   let bannerT = 0;
@@ -82,6 +85,19 @@
     if (c === 'msl') return 'Missiles: shoot from behind your line. Cavalry is their death. Shield walls shrug arrows off.';
     return 'Heavy foot wins the line fight but is slow; archers bleed it on the way in. Shield wall / testudo vs arrows.';
   }
+  // ----- deployment: the sim is frozen; moves teleport inside the side's zone, formations apply directly -----
+  function dzone(s) { return BR.b.zones[s]; }
+  function deployTo(r, x, y) { const z = dzone(r.side), mx = Math.min(r.W, r.D) / 2; r.x = Math.max(z.x0 + mx, Math.min(z.x1 - mx, x)); r.y = Math.max(z.y0 + mx, Math.min(z.y1 - mx, y)); }
+  function deployForm(r, m) { if (!r.def.forms.includes(m)) return; r.form = m; HB.geom(r); deployTo(r, r.x, r.y); }
+  function startFight() {
+    if (!BR.deploy) return; BR.deploy = false; $('bStart').style.display = 'none';
+    const m = BR.m, old = BR.b;
+    for (const s of BR.ctl) { const army = m.sides[s].army; for (const r of old.regs) if (r.side === s && r.ei != null && army[r.ei] && !r.relief) army[r.ei] = Object.assign({}, army[r.ei], { x: Math.round(r.x), y: Math.round(r.y), f: Math.round(r.f * 1000) / 1000, m: r.form }); }
+    const cam = Object.assign({}, R.cam), sel = BR.sel;
+    const b = HB.battleFor(m); BR.b = b; R.setBattle(b, R.colors, BR.me); Object.assign(R.cam, cam); R.camT && Object.assign(R.camT, cam); R.userCam = 2; R.sel = BR.sel = sel; R.ringOpen = false;
+    BR.introT = 0; BR.acc = 0; $('banner').classList.remove('on'); sfx('horn'); toast('Advance!');
+  }
+  $('bStart').onclick = startFight;
   function issue(c) { if (BR.watch || BR.b.over) return; if (BR.lock) BR.lock.send(c); else BR.b.command(c); }
   function mine(r) { return r && r.st === 0 && BR.ctl.includes(r.side); }
   function hostileTo(r) { return r && r.st !== 2 && BR.ctl.length && BR.b.hostile(BR.me, r.side) && r.side !== BR.me; }
@@ -89,7 +105,7 @@
   const deg = (a) => Math.round(a * 180 / Math.PI);
   // pointer handling: tap select / drag move / swipe facing / tap enemy attack / tap ring formation / pinch zoom
   (function battleInput() {
-    const cv = $('cv'), pts = new Map(); let g = null, pinch = null;
+    const cv = $('cv'), pts = new Map(); let g = null, pinch = null, lpT = 0;
     const xy = (e) => { const r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
     cv.addEventListener('pointerdown', (e) => {
       HB.Audio && HB.Audio.unlock(); cv.setPointerCapture && cv.setPointerCapture(e.pointerId);
@@ -98,6 +114,7 @@
       const w = R.toWorld(p.x, p.y);
       const on = R.pick(w.x, w.y);
       g = { x0: p.x, y0: p.y, t0: performance.now(), x: p.x, y: p.y, on: on && mine(on) ? on : null, moved: false, cam: { x: R.cam.x, y: R.cam.y } };
+      clearTimeout(lpT); if (g.on && !BR.watch) { const G1 = g; lpT = setTimeout(() => { if (g === G1 && !G1.moved) { G1.long = true; selectReg(G1.on); R.ringOpen = true; sfx('select'); } }, 450); } // long-press opens the formation ring
     });
     cv.addEventListener('pointermove', (e) => {
       if (!pts.has(e.pointerId)) return; const p = xy(e); pts.set(e.pointerId, p);
@@ -113,6 +130,7 @@
       if (pinch) { if (pts.size < 2) pinch = null; g = null; return; }
       if (!g || !BR.b) return; const G0 = g; g = null; BR.drag = null;
       const b = BR.b, dt = performance.now() - G0.t0;
+      if (G0.moved && G0.on && BR.deploy) { const w = R.toWorld(G0.x, G0.y); deployTo(G0.on, w.x, w.y); selectReg(G0.on); sfx('order'); return; }
       if (G0.moved && G0.on) { // drag a regiment: move to the drop point, face along the drag
         const w = R.toWorld(G0.x, G0.y), r = G0.on; const f = Math.atan2(w.y - r.y, w.x - r.x);
         const t = R.pick(w.x, w.y, (x) => hostileTo(x));
@@ -121,10 +139,10 @@
         issue({ c: 'mv', s: r.id, x: Math.max(5, Math.min(W.W - 5, w.x)), y: Math.max(5, Math.min(W.H - 5, w.y)), f: deg(f) }); sfx('order'); return;
       }
       if (G0.moved && !G0.pan && BR.sel != null && dt < 420) { // quick swipe: turn the selected regiment to face the swipe
-        const r = b.regs[BR.sel]; if (mine(r)) { issue({ c: 'mv', s: r.id, x: r.x, y: r.y, f: deg(Math.atan2(G0.y - G0.y0, G0.x - G0.x0)) }); sfx('order'); tip('Facing set. Flanks and rear take double shock — keep your front to the enemy.'); }
+        const r = b.regs[BR.sel]; if (mine(r) && BR.deploy) { r.f = Math.atan2(G0.y - G0.y0, G0.x - G0.x0); sfx('order'); return; } if (mine(r)) { issue({ c: 'mv', s: r.id, x: r.x, y: r.y, f: deg(Math.atan2(G0.y - G0.y0, G0.x - G0.x0)) }); sfx('order'); tip('Facing set. Flanks and rear take double shock — keep your front to the enemy.'); }
         return;
       }
-      if (G0.moved) return;
+      if (G0.moved || G0.long) return;
       tap(G0.x, G0.y);
     };
     cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', (e) => { pts.delete(e.pointerId); g = null; pinch = null; BR.drag = null; });
@@ -133,7 +151,7 @@
   function tap(sx, sy) {
     const b = BR.b; if (!b || BR.watch) return;
     const ro = R.hitRing(sx, sy);
-    if (ro && BR.sel != null) { const r = b.regs[BR.sel]; if (mine(r)) { if (ro.k === 'fm') { issue({ c: 'fm', s: r.id, m: ro.m }); tip(HB.FORMS[ro.m].name + ': ' + HB.FORMS[ro.m].tip); } else { issue({ c: 'ab', s: r.id }); const L = HB.LORE[r.lore]; L && tip(L.name + ' — ' + L.desc); } sfx('order'); } return; }
+    if (ro && BR.sel != null && R.ringOpen) { const r = b.regs[BR.sel]; R.ringOpen = false; if (mine(r) && BR.deploy) { if (ro.k === 'fm') { deployForm(r, ro.m); tip(HB.FORMS[ro.m].name + ': ' + HB.FORMS[ro.m].tip); sfx('order'); } else toast('Abilities can be used once the battle starts'); return; } if (mine(r)) { if (ro.k === 'fm') { issue({ c: 'fm', s: r.id, m: ro.m }); tip(HB.FORMS[ro.m].name + ': ' + HB.FORMS[ro.m].tip); } else { issue({ c: 'ab', s: r.id }); const L = HB.LORE[r.lore]; L && tip(L.name + ' — ' + L.desc); } sfx('order'); } return; }
     const w = R.toWorld(sx, sy), hit = R.pick(w.x, w.y);
     if (BR.armed) { // curse targeting
       if (hit && hostileTo(hit)) { issue({ c: 'cu', a: BR.me, t: hit.id }); sfx('ability'); }
@@ -141,11 +159,13 @@
       BR.armed = false; $('bCurse').classList.remove('armed'); return;
     }
     if (hit && mine(hit)) {
-      if (BR.sel === hit.id) { const opts = R.ringOpts(hit).filter(o => o.k === 'fm'); const i = opts.findIndex(o => o.on); const nx = opts[(i + 1) % opts.length]; if (nx && opts.length > 1) { issue({ c: 'fm', s: hit.id, m: nx.m }); tip(HB.FORMS[nx.m].name + ': ' + HB.FORMS[nx.m].tip); sfx('order'); } }
-      else selectReg(hit);
+      if (BR.sel === hit.id) { R.ringOpen = !R.ringOpen; if (R.ringOpen) sfx('select'); } // second tap opens the formation ring
+      else { R.ringOpen = false; selectReg(hit); }
       return;
     }
+    R.ringOpen = false;
     const sel = BR.sel != null ? b.regs[BR.sel] : null;
+    if (BR.deploy) { if (mine(sel) && !hit) { deployTo(sel, w.x, w.y); sfx('order'); } else if (hit) toast(hit.name + ' — ' + Math.round(hit.n) + ' men'); return; }
     if (!mine(sel)) { selectReg(hit && hit.side !== BR.me ? null : null); if (hit) toast(hit.name + ' — ' + Math.round(hit.n) + ' men' + (hit.st === 1 ? ' (routing)' : '')); return; }
     if (hit && hostileTo(hit)) { issue({ c: 'at', s: sel.id, t: hit.id }); sfx('order'); return; }
     if (b.S && sel.def.wall) { const sg = R.pickWall(w.x, w.y); if (sg) { issue({ c: 'wl', s: sel.id, w: sg.id }); sfx('order'); tip('Engine ordered to pound that wall.'); return; } }
@@ -203,11 +223,19 @@
   function battleFrame(dt) {
     const b = BR.b; if (!b) return;
     let rate = BR.speed; if (BR.slow > 0) { BR.slow -= dt; rate *= 0.3; }
-    if (BR.lock) { BR.lock.pump(dt); const wt = BR.lock.host ? BR.lock.waiting : !BR.lock.ready; if (wt && !b.over) { BR.waitT = (BR.waitT || 0) + dt; if (BR.waitT > 1.5) { $('tip').textContent = 'Waiting for the other commander…'; $('tip').style.opacity = 1; BR.tipT = 0.5; } } else BR.waitT = 0; }
+    if (BR.introT > 0 && !BR.deploy) BR.introT -= dt;
+    const hold = BR.deploy || BR.introT > 0; // nothing moves and the clock is still while deploying or while the intro banner shows
+    if (hold && !b.over) { /* frozen */ }
+    else if (BR.lock) { BR.lock.pump(dt); const wt = BR.lock.host ? BR.lock.waiting : !BR.lock.ready; if (wt && !b.over) { BR.waitT = (BR.waitT || 0) + dt; if (BR.waitT > 1.5) { $('tip').textContent = 'Waiting for the other commander…'; $('tip').style.opacity = 1; BR.tipT = 0.5; } } else BR.waitT = 0; }
     else if (!b.over) { BR.acc += dt * rate; let n = 0; while (BR.acc >= W.DT && n++ < 10 && !b.over) { b.step(); BR.acc -= W.DT; } if (n >= 10) BR.acc = 0; }
     if (b.fx.length) { for (const e of b.fx) onFx(e); b.fx.length = 0; }
     R.autoCam(dt, BR.spectate);
     R.draw(dt, { spectate: BR.spectate || BR.watch, ctl: BR.ctl });
+    if (BR.deploy) { // the deployment zone
+      const z = dzone(BR.me), g = R.g, a0 = R.toScreen(z.x0, z.y0), a1 = R.toScreen(z.x1, z.y1);
+      g.setTransform(R.dpr, 0, 0, R.dpr, 0, 0); g.fillStyle = 'rgba(245,207,90,0.08)'; g.strokeStyle = '#f5cf5a'; g.lineWidth = 2; g.setLineDash([10, 6]);
+      const x = Math.min(a0.x, a1.x), y = Math.min(a0.y, a1.y), w = Math.abs(a1.x - a0.x), h = Math.abs(a1.y - a0.y); g.fillRect(x, y, w, h); g.strokeRect(x, y, w, h); g.setLineDash([]);
+    }
     if (BR.drag) { // drag preview: gold dashed arrow
       const r = b.regs[BR.drag.id], g = R.g, p = R.toScreen(r.x, r.y);
       g.setTransform(R.dpr, 0, 0, R.dpr, 0, 0); g.strokeStyle = '#f5cf5a'; g.lineWidth = 3; g.setLineDash([8, 6]); g.beginPath(); g.moveTo(p.x, p.y); g.lineTo(BR.drag.x, BR.drag.y); g.stroke(); g.setLineDash([]);
@@ -272,6 +300,7 @@
       <button class="btn big" data-a="spec">Spectate</button>`,
       { cont: () => { closeModal(); resumeCampaign(saved); }, solo: () => seatPicker(false), pass: () => passMenu(), online: () => onlineMenu(), spec: () => spectateMenu() });
   }
+  const rulerOf = (i) => K[i].ruler || K[i].name;
   function seatButtons(sel, taken) { return K.map((k, i) => `<button class="seatb ${sel.includes(i) ? 'on' : ''}" data-a="seat" data-i="${i}" ${taken && taken.includes(i) ? 'disabled style="opacity:.4"' : ''}>${crest(i, 26)}<span>${esc(k.name)}<small>${i === HB.INV ? 'The Invader · Mongol horde' : HB.FACTION[k.culture].name + ' · ' + esc(k.motto)}</small></span></button>`).join(''); }
   function seatPicker(multi, onPick) {
     let sel = multi ? [0, 5] : [0];
@@ -323,7 +352,7 @@
       <p><b>Terrain:</b> hills give reach and morale, forests hide troops and break cavalry, rivers slow everyone except at fords, villages blunt arrows.</p>
       <p><b>Elephants</b> crush lines but panic under javelins and trample their own side.</p>
       <p><b>Sieges:</b> walls in rings — outer, inner, keep. Rams break gates, towers dock, trebuchets breach, infantry put up ladders. Breach a ring and the fight moves inward. Take the keep to win; defenders win if the walls hold.</p>
-      <p><b>Faith &amp; the gods:</b> curse an enemy regiment; spill too much blood and the Gods' Wrath descends — a titan or dragon and a forced truce. Oathbreakers are cursed.</p>
+      <p><b>Faith &amp; the gods:</b> curse an enemy regiment; after a long, bloody, treacherous war the Gods' Wrath may descend late in a battle — a titan walks the field and forces a truce. Oathbreakers are cursed.</p>
       <p><b>Campaign:</b> move armies along roads, recruit at capitals, send envoys with treaties. A walled capital means a siege. The Horde wins with three crowns; the kingdoms win by taking its camp.</p></div>
       <button class="btn gold" data-a="close">To war</button>`);
   }
@@ -388,7 +417,7 @@
   }
   function nextSeat() {
     const s = CP.queue.shift();
-    const go = () => { CP.cur = s; CP.draft = { mv: {}, rc: [], of: [], rs: {} }; MV.setState(CP.st, s); MV.arrows = []; MV.center(capitalOf(s)); mapHud(); $('bEnd').disabled = false; offersFor(s); };
+    const go = () => { CP.cur = s; CP.draft = { mv: {}, rc: [], of: [], rs: {} }; for (const a of CP.st.armies) if (a.f === s && a.dest != null && a.dest !== a.p) CP.draft.mv[a.id] = a.dest; refreshArrows(); MV.setState(CP.st, s); MV.center(capitalOf(s)); mapHud(); $('bEnd').disabled = false; offersFor(s); };
     if (CP.local.length > 1 && !CP.online) cover(`${crest(s, 45)}<h2>${esc(K[s].name)}</h2><p>Pass the device to the ruler of ${esc(K[s].name)}.<br>Turn ${CP.st.turn}</p>`, go);
     else go();
   }
@@ -428,7 +457,7 @@
   function diploSheet() {
     if (CP.cur < 0) return;
     const st = CP.st, me = CP.cur;
-    const rows = K.map((k, i) => i === me || !C.alive(st, i) ? '' : `<div class="item">${crest(i, 26)}<span class="grow"><b>${esc(k.name)}</b><br><span class="muted">${relation(me, i)} · ${st.seats[i].cmd === 'ai' ? (st.seats[i].ai === 'gamedev' ? 'Game Dev (schemer)' : st.seats[i].ai === 'remi' ? 'Remi (loyal)' : 'steady AI') : 'human'}${CP.draft.of.some(o => o.to === i) ? ' · envoy ready' : ''}</span></span>
+    const rows = K.map((k, i) => i === me || !C.alive(st, i) ? '' : `<div class="item">${crest(i, 26)}<span class="grow"><b>${esc(k.name)}</b><br><span class="muted">${relation(me, i)} · ${esc(rulerOf(i))}${st.seats[i].cmd === 'ai' ? '' : ' (player)'}${CP.draft.of.some(o => o.to === i) ? ' · envoy ready' : ''}</span></span>
       ${intelLine(me, i)}</span></span>
       <button class="btn sm" data-a="env" data-i="${i}">Envoy</button> <button class="btn sm ${CP.draft.sp === i ? 'gold' : ''}" data-a="spy" data-i="${i}">🗝 Spy</button></div>`).join('');
     const co = (st.coalition || []).filter(m => C.alive(st, m));
@@ -458,8 +487,8 @@
     const st = CP.st, F = HB.FACTION[K[a.f].culture], mineA = a.f === CP.cur;
     const rows = a.picks.map((ix, i) => `<div class="item"><span class="grow">${esc(F.roster[ix].name)} <span class="muted">${esc(HB.TYPES[F.roster[ix].t].role)}</span></span><span class="hp"><b style="width:${a.hp[i]}%"></b></span></div>`).join('');
     const mv = CP.draft && CP.draft.mv[a.id];
-    sheet(`<h3>${crest(a.f, 22)} ${esc(K[a.f].name)} at ${esc(P[a.p].name)}</h3><div class="muted">Strength ${Math.round(C.strength(st, a))} · ${a.picks.length} regiments${mv != null ? ' · marching to ' + esc(P[mv].name) : ''}</div>
-      ${mineA ? '<div class="muted">Tap a glowing province to march there.</div>' : ''}<div class="list">${rows}</div>
+    sheet(`<h3>${crest(a.f, 22)} ${esc(K[a.f].name)} at ${esc(P[a.p].name)}</h3><div class="muted">Strength ${Math.round(C.strength(st, a))} · ${a.picks.length} regiments${mv != null ? ' · marching to ' + esc(P[mv].name) + (HB.ADJ[a.p].includes(mv) ? '' : ' (' + (C.dist(mv)[a.p]) + ' turns)') : ''}</div>
+      ${mineA ? '<div class="muted">Tap any province to march there — far marches take the roads over several turns.</div>' : ''}<div class="list">${rows}</div>
       ${mineA && mv != null ? '<button class="btn sm" data-a="hold">Hold position</button>' : ''}${mineA && C.canRecruit(st, a.f, a.p) ? ' <button class="btn sm gold" data-a="rec">Recruit here</button>' : ''}`,
       { hold: () => { delete CP.draft.mv[a.id]; refreshArrows(); closeSheet(); }, rec: () => recruitSheet(a.p) });
     if (mineA) { MV.sel = a.id; MV.hl = HB.ADJ[a.p].map(p => ({ p })); }
@@ -481,14 +510,15 @@
       ${CP.cur >= 0 && C.canRecruit(st, CP.cur, p) ? '<button class="btn sm gold" data-a="rec">Recruit</button>' : ''}${CP.cur >= 0 && o >= 0 && o !== CP.cur ? ' <button class="btn sm" data-a="env">Send envoy</button>' : ''}`,
       { rec: () => recruitSheet(p), env: () => envoyCompose(o), army: (el) => { const a = st.armies.find(x => x.id === +el.dataset.id); a && armySheet(a); } });
   }
-  function refreshArrows() { MV.arrows = Object.entries(CP.draft ? CP.draft.mv : {}).map(([id, to]) => { const a = CP.st.armies.find(x => x.id === +id); return a ? { from: a.p, to, col: K[CP.cur].color } : null; }).filter(Boolean); }
+  function marchPath(from, dest) { const out = []; let p = from, g = 0; while (p !== dest && p >= 0 && g++ < 12) { const n = C.pathStep(p, dest); if (n < 0) break; out.push([p, n]); p = n; } return out; }
+  function refreshArrows() { MV.arrows = []; for (const [id, to] of Object.entries(CP.draft ? CP.draft.mv : {})) { const a = CP.st.armies.find(x => x.id === +id); if (!a) continue; marchPath(a.p, to).forEach(([f, t], i) => MV.arrows.push({ from: f, to: t, col: i ? 'rgba(245,207,90,0.75)' : K[CP.cur].color, dest: to })); } }
   function mapTap(sx, sy) {
     if (CP.waiting || CP.spectate) { const h = MV.pick(sx, sy); if (h.prov >= 0) provSheet(h.prov); return; }
     const st = CP.st, h = MV.pick(sx, sy);
     const selA = MV.sel != null ? st.armies.find(a => a.id === MV.sel) : null;
-    if (selA && h.prov >= 0 && HB.ADJ[selA.p].includes(h.prov) && !(h.army && h.army.f === CP.cur && h.army.p !== h.prov)) {
-      const to = h.prov, own = st.owner[to];
-      const doIt = () => { CP.draft.mv[selA.id] = to; refreshArrows(); closeSheet(); sfx('order'); toast(`March on ${P[to].name}${(P[to].cap || P[to].camp) && own !== CP.cur ? ' — a siege!' : ''}`); };
+    if (selA && h.prov >= 0 && h.prov !== selA.p && C.dist(h.prov)[selA.p] < 99 && !(h.army && h.army.f === CP.cur && h.army.id !== selA.id && h.army.p !== h.prov)) {
+      const dest = h.prov, to = HB.ADJ[selA.p].includes(dest) ? dest : C.pathStep(selA.p, dest), own = st.owner[to], hops = C.dist(dest)[selA.p];
+      const doIt = () => { CP.draft.mv[selA.id] = dest; refreshArrows(); closeSheet(); sfx('order'); toast(`March on ${P[dest].name}${hops > 1 ? ' — ' + hops + ' turns, via ' + P[to].name : ''}${(P[dest].cap || P[dest].camp) && st.owner[dest] !== CP.cur ? ' — a siege!' : ''}`); };
       const there = st.armies.filter(a => a.p === to && a.f !== CP.cur).map(a => a.f).concat(own >= 0 && own !== CP.cur ? [own] : []);
       const oath = there.find(f => C.friendly(st, CP.cur, f) && own === f);
       if (oath != null) return modal(`<div class="crests">${crest(oath, 44)}</div><h2>Break your oath?</h2><p>You are bound to ${esc(K[oath].name)} (${relation(CP.cur, oath)}). Marching on ${esc(P[to].name)} is betrayal: the gods will mark you Oathbreaker.</p><button class="btn red" data-a="y">Betray them</button><button class="btn" data-a="close">Keep faith</button>`, { y: () => { closeModal(); doIt(); } });
@@ -520,7 +550,7 @@
   $('bEnd').onclick = () => {
     if (CP.waiting || !CP.draft || CP.cur < 0) return;
     const d = CP.draft, orders = [];
-    for (const id in d.mv) orders.push({ k: 'mv', a: +id, to: d.mv[id] });
+    for (const id in d.mv) { const a = CP.st.armies.find(x => x.id === +id); if (!a || a.p === d.mv[id]) continue; const to = HB.ADJ[a.p].includes(d.mv[id]) ? d.mv[id] : C.pathStep(a.p, d.mv[id]); orders.push(to === d.mv[id] ? { k: 'mv', a: +id, to } : { k: 'mv', a: +id, to, d: d.mv[id] }); }
     for (const o of d.rc) orders.push(o);
     for (const o of d.of) orders.push(o);
     if (d.sp != null) orders.push({ k: 'sp', to: d.sp });
@@ -583,19 +613,23 @@
   function onlineMenu() {
     modal(`<h2>Online with a friend</h2><div class="muted">No accounts. Share a room link; your friend picks the Invader or a kingdom. Empty seats are AI.</div>
       <button class="btn big gold" data-a="host">Host a room</button><h4>or join</h4><input class="input" id="roomIn" maxlength="6" placeholder="CODE"><br><button class="btn" data-a="join">Join</button>`,
-      { host: () => seatPicker(false, (sel) => hostRoom(sel[0])), join: () => { const c = ($('roomIn').value || '').trim().toUpperCase(); if (!/^[A-Z0-9]{4,6}$/.test(c)) return toast('Enter the 4–6 letter room code'); joinRoom(c); } });
+      { host: () => hostRoom(0), join: () => { const c = ($('roomIn').value || '').trim().toUpperCase(); if (!/^[A-Z0-9]{4,6}$/.test(c)) return toast('Enter the 4–6 letter room code'); joinRoom(c); } });
   }
   function lobbyModal(s) {
     const L = s.lobby || {}, taken = Object.keys(L.seats || {}).map(Number);
     const link = location.origin + location.pathname + '#room=' + s.code;
     const rows = taken.map(i => `<div class="item">${crest(i, 24)}<span class="grow">${esc(K[i].name)}</span><span class="muted">${esc(L.seats[i])}${s.seat === i ? ' (you)' : ''}</span></div>`).join('');
-    modal(`<h4>Room</h4><h2 style="letter-spacing:.25em">${esc(s.code)}</h2><div class="muted">${s.isHost ? 'Send this link to a friend:' : 'Joined. Pick your side, then wait for the host.'}</div>
-      ${s.isHost ? `<div style="font-size:11px;word-break:break-all;margin:6px 0">${esc(link)}</div><button class="btn sm" data-a="copy">Copy link</button>` : ''}
+    const alone = taken.length < 2, canShare = !!navigator.share;
+    modal(`<h4>Room code</h4><h2 id="roomCode" style="letter-spacing:.25em;font-size:40px;margin:2px 0">${esc(s.code)}</h2>
+      ${s.isHost ? `<div class="muted">${alone ? 'Send this code or link to a friend. It stays here until they join.' : 'A friend has joined.'}</div>
+      <div id="roomLink" style="font-size:12px;word-break:break-all;margin:6px 0;padding:6px;border:1px dashed #b89a55;border-radius:6px">${esc(link)}</div>
+      <button class="btn gold" data-a="copy">Copy link</button>${canShare ? '<button class="btn" data-a="share">Share…</button>' : ''}` : '<div class="muted">Joined. Pick your side, then wait for the host.</div>'}
       <h4>Rulers</h4><div class="list">${rows || '<div class="muted">Waiting…</div>'}</div>
       ${!s.isHost && s.seat < 0 ? `<h4>Choose your side</h4><div class="seats">${seatButtons([], taken)}</div>` : ''}
+      ${s.isHost && alone ? `<h4>Your crown</h4><div class="seats">${seatButtons([s.seat], taken.filter(i => i !== s.seat))}</div>` : ''}
       ${s.isHost ? `<button class="btn big gold" data-a="start" ${taken.length < 2 ? 'disabled' : ''}>Begin the campaign</button>` : '<div class="muted">The host begins the campaign.</div>'}
       <div class="muted" id="netStatus">${esc(s.status || '')}</div><button class="btn sm red" data-a="leave">Leave</button>`,
-      { copy: () => { copyText(link); toast('Room link copied'); }, seat: (el) => s.pickSeat(+el.dataset.i), start: () => s.start(), leave: () => { s.close(); CP.online = null; closeModal(); goTitle(); } }, { noClose: true });
+      { copy: () => { copyText(link); toast('Room link copied — code ' + s.code); }, share: () => { navigator.share({ title: 'Timeline Brawl', text: 'Join my Five Crowns room: ' + s.code, url: link }).catch(() => {}); }, seat: (el) => s.pickSeat(+el.dataset.i), start: () => s.start(), leave: () => { s.close(); CP.online = null; closeModal(); goTitle(); } }, { noClose: true });
   }
   function wire(s) {
     CP.online = s; CP.reported = {}; CP.netKey = '';
@@ -661,7 +695,8 @@
     HB, BR, CP, R, MV,
     quick: quickBattle, spectate: spectateBattle, campaign: (humans, seed) => startCampaign({ humans, seed }), host: hostRoom, join: joinRoom,
     // advance the running battle by `sec` simulated seconds (tests)
-    ff(sec) { const b = BR.b; if (!b || BR.lock) return; let n = Math.round(sec / W.DT); while (n-- > 0 && !b.over) b.step(); },
+    start() { startFight(); BR.introT = 0; },
+    ff(sec) { if (BR.deploy) startFight(); BR.introT = 0; const b = BR.b; if (!b || BR.lock) return; let n = Math.round(sec / W.DT); while (n-- > 0 && !b.over) b.step(); },
     screen: () => screen,
     endTurn: () => $('bEnd').click(),
   };

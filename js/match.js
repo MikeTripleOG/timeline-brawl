@@ -103,11 +103,11 @@
       }
       return { faction: s.faction, cmd: s.cmd || 'ai', name: s.name || HB.FACTION[s.faction].name, picks, army, color: s.color, oath: s.oath, vengeOn: s.vengeOn };
     });
-    return { v: 3, seed, budget, weather: o.weather || 'clear', terrain: o.siege ? 'siege' : o.terrain || '', title: o.title || '', tmax: o.tmax || 0, siege: o.siege || null, sides };
+    return { v: 3, seed, budget, weather: o.weather || 'clear', terrain: o.siege ? 'siege' : o.terrain || '', title: o.title || '', tmax: o.tmax || 0, siege: o.siege || null, wrath: o.wrath ? 1 : 0, sides };
   }
   HB.makeMatch = makeMatch;
   function battleFor(m, extra) {
-    return new HB.Battle(Object.assign({ seed: m.seed, weather: m.weather, terrain: m.terrain, title: m.title, tmax: m.tmax || 0, siege: m.siege || null,
+    return new HB.Battle(Object.assign({ seed: m.seed, weather: m.weather, terrain: m.terrain, title: m.title, tmax: m.tmax || 0, siege: m.siege || null, wrath: m.wrath || 0,
       armies: m.sides.map(s => s.army), factions: m.sides.map(s => ({ faction: s.faction, cmd: s.cmd, name: s.name, oath: s.oath, vengeOn: s.vengeOn, color: s.color })) }, extra || {}));
   }
   HB.battleFor = battleFor;
@@ -140,11 +140,11 @@
     const z = m.siege ? HB.siegeZones(m.siege) : HB.zonesFor(m.sides.length);
     const sides = m.sides.map((s, i) => {
       const def = layout(s.faction, s.picks, z[i]);
-      const same = def.length === s.army.length && def.every((e, k) => e.r === s.army[k].r && e.x === s.army[k].x && e.y === s.army[k].y && s.army[k].f == null && s.army[k].h == null);
-      return [s.faction, s.cmd, s.picks.map(i => i.toString(36)).join(''), same ? 0 : s.army.map(e => e.h != null ? [e.r, e.x, e.y, e.h] : [e.r, e.x, e.y]), s.name, s.color || 0, s.oath ? 1 : 0, s.vengeOn != null ? s.vengeOn : -1];
+      const same = def.length === s.army.length && def.every((e, k) => e.r === s.army[k].r && e.x === s.army[k].x && e.y === s.army[k].y && s.army[k].f == null && s.army[k].h == null && !s.army[k].m);
+      return [s.faction, s.cmd, s.picks.map(i => i.toString(36)).join(''), same ? 0 : s.army.map(e => { const a = [e.r, e.x, e.y]; if (e.h != null || e.f != null || e.m) a.push(e.h != null ? e.h : 100); if (e.f != null || e.m) a.push(e.f != null ? Math.round(e.f * 1000) / 1000 : null, e.m || 0); return a; }), s.name, s.color || 0, s.oath ? 1 : 0, s.vengeOn != null ? s.vengeOn : -1];
     });
     const c = (cmds || []).map(x => { const o = Object.assign({}, x); return o; });
-    return b64e(JSON.stringify({ v: 3, s: m.seed, b: m.budget, w: m.weather, t: m.terrain, n: m.title || 0, x: m.tmax || 0, g: m.siege || 0, d: sides, c }));
+    return b64e(JSON.stringify({ v: 3, s: m.seed, b: m.budget, w: m.weather, t: m.terrain, n: m.title || 0, x: m.tmax || 0, g: m.siege || 0, r: m.wrath ? 1 : 0, d: sides, c }));
   };
   HB.decodeWatch = (str) => {
     try {
@@ -152,8 +152,8 @@
       const z = o.g ? HB.siegeZones(o.g) : HB.zonesFor(o.d.length);
       const sides = o.d.map((d, i) => { const picks = d[2].split('').map(c => parseInt(c, 36));
         return { faction: d[0], cmd: d[1], picks, name: d[4] || HB.FACTION[d[0]].name, color: d[5] || undefined, oath: !!d[6], vengeOn: d[7] >= 0 ? d[7] : undefined,
-          army: d[3] ? d[3].map(a => a.length > 3 ? { r: a[0], x: a[1], y: a[2], h: a[3] } : { r: a[0], x: a[1], y: a[2] }) : layout(d[0], picks, z[i]) }; });
-      return { m: { v: 3, seed: o.s, budget: o.b, weather: o.w, terrain: o.t, title: o.n || '', tmax: o.x || 0, siege: o.g || null, sides }, cmds: o.c || [] };
+          army: d[3] ? d[3].map(a => { const e = { r: a[0], x: a[1], y: a[2] }; if (a.length > 3) e.h = a[3]; if (a[4] != null) e.f = a[4]; if (a[5]) e.m = a[5]; return e; }) : layout(d[0], picks, z[i]) }; });
+      return { m: { v: 3, seed: o.s, budget: o.b, weather: o.w, terrain: o.t, title: o.n || '', tmax: o.x || 0, siege: o.g || null, wrath: o.r || 0, sides }, cmds: o.c || [] };
     } catch (e) { return null; }
   };
 })(typeof window !== 'undefined' ? window : globalThis);
