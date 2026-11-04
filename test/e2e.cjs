@@ -10,13 +10,25 @@ let pass = 0, fail = 0; const ok = (c, m) => { if (c) { pass++; console.log('  â
   const pg = await ctx.newPage(); const errs = [];
   pg.on('console', m => { if (m.type() === 'error') errs.push(m.text()); }); pg.on('pageerror', e => errs.push('PAGEERR ' + e.message));
   const ev = (f, a) => pg.evaluate(f, a);
+  const home = async (w = 600) => { await pg.goto(BASE); await pg.waitForSelector('#title.ready', { timeout: 8000 }); if (await pg.isVisible('#bBegin')) await pg.click('#bBegin', { force: true }); await pg.waitForTimeout(w); };
   const tapAt = async (x, y) => { await pg.touchscreen.tap(x, y); await pg.waitForTimeout(120); };
   const drag = async (x0, y0, x1, y1, steps = 8) => { // touch drag via pointer events
     await pg.mouse.move(x0, y0); await pg.mouse.down(); for (let i = 1; i <= steps; i++) { await pg.mouse.move(x0 + (x1 - x0) * i / steps, y0 + (y1 - y0) * i / steps); await pg.waitForTimeout(20); } await pg.mouse.up(); await pg.waitForTimeout(100); };
 
   console.log('title');
-  await pg.goto(BASE); await pg.waitForTimeout(1200);
-  ok(await pg.isVisible('text=Trial version'), 'title shows the gold "Trial version" tag');
+  await pg.goto(BASE); await pg.waitForSelector('#title.ready', { timeout: 8000 }); await pg.waitForTimeout(300);
+  const ka = await ev(() => { const sc = document.getElementById('kaScene'), r = sc.getBoundingClientRect(), st = document.getElementById('kaStrip').getBoundingClientRect(), b = document.getElementById('bBegin').getBoundingClientRect();
+    return { art: !!(__tb.HB.ART.title && /title_key\.webp/.test(getComputedStyle(sc).backgroundImage)), cover: r.width >= innerWidth - 1 && r.bottom >= st.top - 1, strip: st.bottom >= innerHeight - 1 && st.height >= 50, onStrip: b.top >= st.top && b.bottom <= st.bottom, pulse: getComputedStyle(document.getElementById('bBegin')).animationName, codeTitle: document.getElementById('logoTxt').offsetParent !== null || document.getElementById('subTxt').offsetParent !== null }; });
+  ok(ka.art && ka.cover && ka.strip, 'title key art fills the screen above the parchment strip');
+  ok(ka.onStrip && ka.pulse === 'tapPulse' && await pg.isVisible('text=Tap to begin'), 'a pulsing "Tap to begin" sits on the parchment strip');
+  ok(!ka.codeTitle && !(await pg.isVisible('#bQuick')), 'no duplicate code-drawn title and the menu waits behind the splash');
+  await pg.screenshot({ path: SHOTS + '/e2e-splash.png' });
+  await pg.touchscreen.tap(206, 300); await pg.waitForTimeout(700);
+  ok(await pg.isVisible('text=Trial version') && await pg.isVisible('#bQuick') && !(await pg.isVisible('#bBegin')), 'tapping the splash goes to the menu with the gold "Trial version" tag');
+  await pg.setViewportSize({ width: 844, height: 390 }); await pg.waitForTimeout(300);
+  const ls = await ev(() => { const tb = document.querySelector('#title .titlebox').getBoundingClientRect(), bq = document.getElementById('bQuick').getBoundingClientRect(); return tb.top >= 0 && tb.bottom <= innerHeight && tb.left > innerWidth * 0.45 && bq.bottom <= innerHeight; });
+  ok(ls, 'landscape phone: the menu card sits right of the painted title and fits the screen');
+  await pg.setViewportSize({ width: 412, height: 860 }); await pg.waitForTimeout(300);
   await pg.screenshot({ path: SHOTS + '/e2e-title.png' });
 
   console.log('quick battle (tap-first controls)');
@@ -80,7 +92,7 @@ let pass = 0, fail = 0; const ok = (c, m) => { if (c) { pass++; console.log('  â
   await pg.click('[data-a=done]'); await pg.waitForTimeout(300);
 
   console.log('custom siege (attack)');
-  await pg.goto(BASE); await pg.waitForTimeout(800);
+  await home(800);
   await pg.click('#bCustom'); await pg.click('[data-a=field][data-v=siegeA]'); await pg.click('[data-a=go]'); await pg.waitForTimeout(1000);
   ok(await ev(() => !!__tb.BR.b.S && __tb.BR.b.S.segs.length > 20), 'siege battle has walls in rings (' + await ev(() => __tb.BR.b.S.segs.length) + ' segments)');
   ok(await pg.isVisible('text=Walls'), 'siege HUD shows wall integrity');
@@ -157,7 +169,7 @@ let pass = 0, fail = 0; const ok = (c, m) => { if (c) { pass++; console.log('  â
 
   console.log('campaign battle played on the field');
   await ev(() => { const st = __tb.CP.st; }); 
-  await pg.goto(BASE); await pg.waitForTimeout(600);
+  await home(600);
   await ev(() => __tb.campaign([4], 11)); await pg.click('[data-a=go]'); await pg.waitForTimeout(300);
   // march Drakonia's capital army onto the Eastern Hills (held by the Horde) -> field battle
   await ev(() => { const st = __tb.CP.st, a = st.armies.find(x => x.f === 4 && x.p === 8); __tb.CP.draft.mv[a.id] = 11; });
@@ -182,12 +194,12 @@ let pass = 0, fail = 0; const ok = (c, m) => { if (c) { pass++; console.log('  â
   ok(await pg.isVisible('#cover.on') && /Crimson Horde/.test(await pg.textContent('#cover')), 'then passes to the second ruler');
 
   console.log('polish: title config, crests, sound, saves, presets');
-  await pg.goto(BASE); await pg.waitForTimeout(900);
-  const tc = await ev(() => ({ cfg: __tb.HB.CONFIG.title, logo: document.getElementById('logoTxt').textContent, title: document.title, loading: document.getElementById('loading').classList.contains('on'), crests: [...document.querySelectorAll('#crestRow img')].map(i => i.complete && i.naturalWidth > 0) }));
-  ok(tc.logo === tc.cfg && tc.title.startsWith(tc.cfg) && !tc.loading, 'title text comes from HB.CONFIG and the loading screen clears (' + tc.cfg + ')');
+  await home(900);
+  const tc = await ev(() => ({ cfg: __tb.HB.CONFIG.title, logo: document.getElementById('logoTxt').textContent, title: document.title, loading: document.getElementById('title').classList.contains('splash'), crests: [...document.querySelectorAll('#crestRow img')].map(i => i.complete && i.naturalWidth > 0) }));
+  ok(tc.logo === tc.cfg && tc.title.startsWith(tc.cfg) && !tc.loading, 'title text comes from HB.CONFIG and the splash clears to the menu (' + tc.cfg + ')');
   ok(tc.crests.length === 6 && tc.crests.every(Boolean), 'all six crest images load on the title (' + tc.crests.filter(Boolean).length + '/6)');
   const m0 = await ev(() => __tb.HB.Audio.muted);
-  await pg.click('#bMute'); await pg.goto(BASE); await pg.waitForTimeout(900);
+  await pg.click('#bMute'); await home(900);
   const m1 = await ev(() => ({ m: __tb.HB.Audio.muted, t: document.getElementById('bMute').textContent }));
   ok(m1.m === !m0 && m1.t === (m1.m ? 'ðŸ”‡' : 'ðŸ”Š'), 'the mute toggle works and is remembered across reloads');
   await pg.click('#bMute');
@@ -195,7 +207,7 @@ let pass = 0, fail = 0; const ok = (c, m) => { if (c) { pass++; console.log('  â
   await pg.click('#bPlay'); await pg.waitForTimeout(150);
   ok(!(await pg.isVisible('[data-a=cont]')) && await ev(() => localStorage.getItem('tb-campaign') === null && localStorage.getItem('tb3-campaign') === null), 'an incompatible save is dropped and Continue is hidden');
   await ev(() => document.querySelector('#modal [data-a=close]') ? document.querySelector('#modal [data-a=close]').click() : __tb.closeModal && __tb.closeModal());
-  await pg.goto(BASE); await pg.waitForTimeout(900);
+  await home(900);
   await pg.click('#bPreset'); await pg.waitForTimeout(400);
   const pv = await ev(() => { const b = __tb.BR.b; return { scr: __tb.screen(), mine: b.regs.filter(r => r.side === 0).map(r => r.name), foe: b.regs.filter(r => r.side === 1).map(r => r.name) }; });
   ok(pv.scr === 'battle' && pv.mine.filter(n => n === 'Phalangites').length >= 4 && pv.foe.filter(n => n === 'Keshig lancers').length >= 4, 'Pikes vs Charge preset: ' + pv.mine.length + ' Macedonian blocks vs ' + pv.foe.length + ' Mongol blocks');

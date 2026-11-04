@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Import Game Dev's art drops from /workspace/timeline-brawl-art/ into assets/art/ and regenerate js/art.js.
 Drop-in names it understands (any of .jpg/.jpeg/.png/.webp):
-  title_key.*            -> title / loading key art           (assets/art/title_key.jpg)
+  title_key*.*           -> title / loading key art, split into full/scene/logo/strip layers (assets/art/title_*.webp)
   crest_<kingdom>.*      -> one crest (eldenvale, northgard, solenthia, vellorien, drakonia, invader)
   banner_<kingdom>.*     -> one tall banner for the faction pickers
   kingdom_crests.jpg     -> the five-banner sheet (cropped automatically when no single crest file exists)
@@ -25,8 +25,31 @@ def shield_mask(w, h):
     pts += [((L + (0.5 - L) * (t / 20) ** 1.4) * W, (0.5 + 0.49 * math.sin(t / 20 * math.pi / 2)) * H) for t in range(19, 0, -1)] + [(L * W, 0.5 * H)]
     d.polygon(pts, fill=255); return m.resize((w, h), Image.LANCZOS)
 art = {'title': None, 'crest': {}, 'banner': {}, 'unit': {}}
+# Title key art (16:9, title + tagline painted top-left, empty parchment strip along the bottom).
+# Split into web-optimised layers so one painting fits portrait and landscape phones:
+#   title_key.webp    full painting, 1280 wide. js/ui.js crops it live: landscape keeps the painted title, portrait shows
+#                     only the battle below the tagline, centred on the clash (TITLE_FOCUS_X)
+#   title_logo.webp   the painted title + tagline with feathered alpha edges (portrait: shown on its own at the top)
+#   title_strip.webp  the empty parchment strip ("Tap to begin" is set on it in HTML)
+# Fractions are of the painting's height/width; override with TITLE_* env vars if Game Dev repaints the layout.
 f = find('title_key')
-if f: im = Image.open(f).convert('RGB'); im.thumbnail((1600, 1600)); im.save(os.path.join(OUT, 'title_key.jpg'), quality=82); art['title'] = 'assets/art/title_key.jpg'
+if f:
+    im = Image.open(f).convert('RGB')
+    if im.width > 1280: im = im.resize((1280, round(im.height * 1280 / im.width)), Image.LANCZOS)
+    W, H = im.size; fr = lambda k, d: float(os.environ.get(k, d))
+    STRIP, SCENE_TOP, LOGO = fr('TITLE_STRIP_TOP', 0.88), fr('TITLE_SCENE_TOP', 0.30), (fr('TITLE_LOGO_X0', 0.06), fr('TITLE_LOGO_X1', 0.565), fr('TITLE_LOGO_Y1', 0.33))
+    im.save(os.path.join(OUT, 'title_key.webp'), quality=78, method=6)
+    im.crop((0, round(H * STRIP), W, H)).save(os.path.join(OUT, 'title_strip.webp'), quality=78, method=6)
+    lg = im.crop((round(W * LOGO[0]), 0, round(W * LOGO[1]), round(H * LOGO[2]))).convert('RGBA'); lw, lh = lg.size
+    a = Image.new('L', (lw, lh), 255); px = a.load(); fx, fy = lw * 0.08, lh * 0.16
+    for y in range(lh):
+        for x in range(lw):
+            k = min(1, x / fx, (lw - 1 - x) / fx, (lh - 1 - y) / fy); px[x, y] = round(255 * max(0, k) ** 0.8)
+    lg.putalpha(a); lg.save(os.path.join(OUT, 'title_logo.webp'), quality=82, method=6)
+    for old in ('title_key.jpg', 'title_scene.webp'):
+        if os.path.exists(os.path.join(OUT, old)): os.remove(os.path.join(OUT, old))
+    art['title'] = 'assets/art/title_key.webp'
+    art['titleLayers'] = {'logo': 'assets/art/title_logo.webp', 'strip': 'assets/art/title_strip.webp', 'w': W, 'h': H, 'stripTop': STRIP, 'sceneTop': SCENE_TOP, 'focusX': fr('TITLE_FOCUS_X', 0.47), 'logoBox': [LOGO[0], LOGO[1], LOGO[2]], 'logoAlt': 'Timeline Brawl: Five Crowns. One Horde.'}
 sheet = find('kingdom_crests')
 for i, k in enumerate(IDS):
     f = find('crest_' + k)

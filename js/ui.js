@@ -13,7 +13,7 @@
     for (const s of document.querySelectorAll('.screen')) { s.classList.toggle('on', s.id === id); if (s.id === id && changed) { s.classList.remove('enter'); void s.offsetWidth; s.classList.add('enter'); } }
     screen = id; closeSheet();
     if (changed) { clearToast(); hideCard(); const f = $('fader'); f.classList.remove('go'); void f.offsetWidth; f.classList.add('go'); }
-    if (id === 'map') MV.resize(); if (id === 'battle') R.resize();
+    if (id === 'map') MV.resize(); if (id === 'battle') R.resize(); if (id === 'title') layoutKeyArt();
     if (HB.Audio) { if (id === 'map') HB.Audio.startMusic(); else HB.Audio.stopMusic(); }
   }
   // toasts expire on their own, and a new screen clears a stale one
@@ -402,7 +402,7 @@
     for (const [id, v] of [['logoTxt', CF.title], ['ldLogo', CF.title], ['subTxt', CF.subtitle], ['ldSub', CF.subtitle], ['tagTxt', CF.tag]]) if (v && $(id)) $(id).textContent = v;
     if (CF.title) document.title = CF.title + (CF.subtitle ? ' — ' + CF.subtitle : '');
     const c1 = document.querySelector('#map .cartouche .c1'); if (c1 && CF.subtitle) c1.textContent = CF.subtitle;
-    if (HB.ART && HB.ART.title) for (const el of document.querySelectorAll('.titlebg, .ldbg')) el.style.backgroundImage = 'url(' + HB.ART.title + ')';
+    keyArt();
     $('crestRow').innerHTML = K.map((k, i) => crest(i, 30)).join('');
     syncMute();
   }
@@ -766,12 +766,47 @@
   }
   G.addEventListener('hashchange', route);
   applyConfig();
-  (function boot() { // loading screen: crest art preloads behind it; it never blocks for more than ~0.8s
-    const imgs = [...document.querySelectorAll('#crestRow img')], tips = ['Sharpening pikes…', 'Saddling the Keshig…', 'Mustering the Five Crowns…', 'Sealing treaties…'];
-    $('ldTip').textContent = tips[Math.floor(Math.random() * tips.length)];
-    let done = false; let fin = () => { if (done) return; done = true; $('ldFill').style.width = '100%'; setTimeout(() => $('loading').classList.remove('on'), 180); };
-    const tick = () => { const n = imgs.filter(i => i.complete).length; $('ldFill').style.width = Math.round(20 + 80 * n / Math.max(1, imgs.length)) + '%'; if (n >= imgs.length) fin(); };
-    const t0 = Date.now(); imgs.forEach(i => i.addEventListener('load', tick)); const fin0 = fin; fin = () => setTimeout(fin0, Math.max(0, 420 - (Date.now() - t0))); tick(); setTimeout(fin0, 700);
+  // ---------- title key art: one 16:9 painting cropped live for portrait and landscape phones ----------
+  // Landscape: the whole painting minus its bottom strip, cropped so the painted title stays in view.
+  // Portrait: the painted title (title_logo.webp) on top, then the battle below the tagline, cropped round the clash.
+  function keyArt() {
+    const T = HB.ART && HB.ART.title, L = HB.ART && HB.ART.titleLayers, ti = $('title');
+    ti.classList.toggle('keyart', !!(T && L)); if (!T || !L) { ti.classList.remove('splash'); return; }
+    $('kaScene').style.backgroundImage = 'url(' + T + ')'; $('kaLogo').style.backgroundImage = 'url(' + L.logo + ')'; $('kaStrip').style.backgroundImage = 'url(' + L.strip + ')';
+    $('kaLogo').setAttribute('aria-label', L.logoAlt || ''); layoutKeyArt();
+  }
+  function layoutKeyArt() {
+    const L = HB.ART && HB.ART.titleLayers, ti = $('title'); if (!L || !ti.classList.contains('keyart')) return;
+    const vw = ti.clientWidth || innerWidth, vh = ti.clientHeight || innerHeight, portrait = vw / vh < 1.45, splash = ti.classList.contains('splash');
+    ti.classList.toggle('ka-portrait', portrait); ti.classList.toggle('ka-landscape', !portrait);
+    const stripH = splash ? Math.round(portrait ? Math.max(56, Math.min(84, vh * 0.09)) : Math.max(44, Math.min(96, vh * 0.12))) : 0;
+    $('kaStrip').style.height = stripH + 'px';
+    const [lx0, lx1, ly1] = L.logoBox, la = (lx1 - lx0) * L.w / (ly1 * L.h); // logo aspect
+    let top = 0, y0 = 0, y1 = L.stripTop - 0.01, logoH = 0;
+    if (portrait) { const lw = Math.min(vw, 560); logoH = Math.round(lw / la); const lg = $('kaLogo'); lg.style.width = lw + 'px'; lg.style.height = logoH + 'px'; y0 = Math.max(L.sceneTop, ly1 + 0.005); } // the battle runs under the painted title, so tablets get no dark side bars
+    ti.style.setProperty('--logoH', logoH + 'px');
+    const bw = vw, bh = Math.max(1, vh - stripH - top), sc = $('kaScene');
+    sc.style.top = top + 'px'; sc.style.height = bh + 'px';
+    const s = Math.max(bw / L.w, bh / ((y1 - y0) * L.h)), iw = L.w * s, ih = L.h * s, vis = bw / iw; // vis = fraction of the width in view
+    let fx = L.focusX - vis / 2; if (!portrait) fx = Math.min(fx, lx0 - 0.01); fx = Math.max(0, Math.min(1 - vis, fx));
+    const visH = bh / ih, fy = portrait ? y0 + Math.max(0, (y1 - y0) - visH) * 0.45 : Math.max(0, Math.min(y1 - visH, 0.012)); // landscape: a sliver off the sky at most // landscape: keep the painted title at the top
+    sc.style.backgroundSize = Math.round(iw) + 'px ' + Math.round(ih) + 'px'; sc.style.backgroundPosition = Math.round(-fx * iw) + 'px ' + Math.round(-fy * ih) + 'px';
+  }
+  addEventListener('resize', layoutKeyArt); addEventListener('orientationchange', () => setTimeout(layoutKeyArt, 120));
+  function begin() { // the splash's "Tap to begin": unlock audio and reveal the menu
+    const ti = $('title'); if (!ti.classList.contains('splash') || !ti.classList.contains('ready')) return;
+    HB.Audio && HB.Audio.unlock(); sfx('horn'); ti.classList.remove('splash'); ti.classList.add('menu-in'); layoutKeyArt(); setTimeout(() => ti.classList.remove('menu-in'), 600);
+  }
+  $('title').addEventListener('click', (e) => { if ($('title').classList.contains('splash')) { e.stopPropagation(); begin(); } }, true);
+  addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && screen === 'title') begin(); });
+  (function boot() { // loading: a progress bar on the parchment strip while the painting arrives, then "Tap to begin"
+    const ti = $('title');
+    if (location.hash.length > 1 || !ti.classList.contains('keyart')) { ti.classList.remove('splash'); ti.classList.add('ready'); layoutKeyArt(); return; } // deep links (#room, #watch) skip the splash
+    const srcs = [HB.ART.title, HB.ART.titleLayers.logo, HB.ART.titleLayers.strip].concat([...document.querySelectorAll('#crestRow img')].map(i => i.src));
+    let n = 0, done = false; const fill = $('ldFill');
+    const ready = () => { if (done) return; done = true; fill.style.width = '100%'; setTimeout(() => ti.classList.add('ready'), 200); };
+    for (const src of srcs) { const im = new Image(); im.onload = im.onerror = () => { n++; fill.style.width = Math.round(15 + 85 * n / srcs.length) + '%'; if (n >= srcs.length) ready(); }; im.src = src; }
+    setTimeout(ready, 4000); // never hold the player hostage to a slow image
   })();
   route();
   document.addEventListener('visibilitychange', () => { last = performance.now(); });

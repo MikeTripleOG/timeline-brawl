@@ -13,11 +13,12 @@
 </head>
 <body>
 <div id="app">
-  <!-- loading -->
-  <section id="loading" class="loading on"><div class="ldbg"></div><div class="ldbox"><div class="logo" id="ldLogo">Timeline Brawl</div><div class="sublogo" id="ldSub">The Five Crowns</div><div class="ldbar"><b id="ldFill"></b></div><div class="ldtip" id="ldTip">Sharpening pikes…</div></div></section>
   <!-- title -->
-  <section id="title" class="screen on">
+  <section id="title" class="screen on splash">
     <div class="titlebg"></div>
+    <!-- key art (HB.ART.titleLayers): the painting carries the title, so no title text is drawn over it -->
+    <div class="ka" aria-hidden="true"><div class="ka-scene" id="kaScene"></div><div class="ka-logo" id="kaLogo"></div></div>
+    <div class="ka-strip" id="kaStrip"><div class="ldbar" id="ldBar"><b id="ldFill"></b></div><button class="tapgo" id="bBegin">Tap to begin</button></div>
     <div class="titlebox">
       <div class="logo" id="logoTxt">Timeline Brawl</div>
       <div class="sublogo" id="subTxt">The Five Crowns</div>

@@ -142,3 +142,30 @@ img.uface { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; ma
 .hasStrip .toast { bottom: 196px; }
 .crestrow img.crestimg { width: 34px !important; height: 40px !important; }
 .hasStrip.stripOpen .toast { bottom: auto; top: 96px; } #bCurse .faith { font-size: 11px; opacity: .85; margin-left: 2px; }
+/* ---------- title key art (layers placed by layoutKeyArt in js/ui.js) ---------- */
+.ka, .ka-strip { display: none; }
+#title.keyart .titlebg { display: none; }
+#title.keyart .ka { display: block; position: absolute; inset: 0; background: #17100a; overflow: hidden; }
+.ka-scene { position: absolute; left: 0; right: 0; top: 0; background-repeat: no-repeat; transition: filter .5s ease; }
+.ka-logo { display: none; position: absolute; top: 0; left: 50%; transform: translateX(-50%); background: center/100% 100% no-repeat; z-index: 1; }
+#title.ka-portrait .ka-logo { display: block; }
+#title.keyart:not(.splash) .ka-scene { filter: brightness(.62) saturate(.95); }
+#title.keyart.splash { cursor: pointer; }
+#title.keyart.splash .titlebox { display: none; }
+#title.keyart .titlebox #logoTxt, #title.keyart .titlebox #subTxt { display: none; } /* the painting carries the title */
+#title.keyart.splash .ka-strip { display: flex; position: absolute; z-index: 3; left: 0; right: 0; bottom: 0; align-items: center; justify-content: center; background: #d8c08c center/100% 100% no-repeat; box-shadow: 0 -2px 0 #2a1b0c, 0 -5px 14px rgba(0,0,0,.55); padding-bottom: env(safe-area-inset-bottom); }
+.ka-strip .ldbar { width: min(60%, 280px); margin: 0; background: rgba(60,40,15,.28); }
+.ka-strip .tapgo { display: none; border: 0; background: none; cursor: pointer; font: 700 clamp(17px, 4.6vmin, 26px) Cinzel, Georgia, serif; letter-spacing: .14em; text-transform: uppercase; color: #4a2c0e; text-shadow: 0 1px 0 rgba(255,240,200,.7); animation: tapPulse 1.6s ease-in-out infinite; padding: 8px 18px; }
+#title.ready .ka-strip .ldbar { display: none; } #title.ready .ka-strip .tapgo { display: block; }
+@keyframes tapPulse { 0%, 100% { opacity: .55; transform: scale(.97); } 50% { opacity: 1; transform: scale(1.03); } }
+#title.keyart .titlebox { background: rgba(243,228,190,.94); }
+#title.keyart.ka-portrait .titlebox { top: calc(var(--logoH, 0px) * .86 + 8px); transform: translateX(-50%); max-height: calc(100% - var(--logoH, 0px) * .86 - 16px); overflow-y: auto; }
+#title.keyart.ka-landscape .titlebox { left: auto; right: max(3vw, env(safe-area-inset-right)); top: 50%; transform: translateY(-50%); width: min(42vw, 360px); max-height: 94%; overflow-y: auto; padding: 12px 14px 10px; }
+#title.keyart.ka-landscape .titlebox .btn.big { padding: 10px; margin: 5px 0; font-size: 16px; }
+#title.keyart.ka-landscape .titlebox .foot { display: none; }
+#title.menu-in .titlebox { animation: menuIn .45s ease-out both; }
+#title.menu-in.ka-portrait .titlebox { animation-name: menuInP; }
+@keyframes menuIn { from { opacity: 0; transform: translateY(-46%); } to { opacity: 1; transform: translateY(-50%); } }
+@keyframes menuInP { from { opacity: 0; transform: translate(-50%, 12px); } to { opacity: 1; transform: translate(-50%, 0); } }
+@media (prefers-reduced-motion: reduce) { .ka-strip .tapgo { animation: none; opacity: 1; } #title.menu-in .titlebox { animation: none; } }
+#title.keyart.splash::after { background: radial-gradient(ellipse at 50% 45%, transparent 55%, rgba(20,12,4,.38)); }
