@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#14121c">
+<title>Timeline Brawl — history's units, one battlefield</title>
+<meta name="description" content="Draft units from 5 eras of history on an equal budget and watch them brawl. 300 Spartans vs Navy SEALs, 5,000 legionaries vs an Abrams, and more.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ctext y=%22.9em%22 font-size=%2290%22%3E%E2%9A%94%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="app">
+  <canvas id="cv"></canvas>
+
+  <!-- MENU -->
+  <section id="menu" class="screen">
+    <div class="menu-inner">
+      <h1 class="logo">TIMELINE<span>BRAWL</span></h1>
+      <p class="tag">Every era. Same budget. Who wins?</p>
+      <h2>Featured matchups</h2>
+      <div id="featured" class="cards"></div>
+      <h2>Custom battle</h2>
+      <div class="opts">
+        <div class="opt"><label>Mode</label><div class="seg" id="opt-mode"><button data-v="ai" class="on">vs AI</button><button data-v="2p">2 players</button></div></div>
+        <div class="opt"><label>Budget</label><div class="seg" id="opt-budget"><button data-v="5000">5k</button><button data-v="10000" class="on">10k</button><button data-v="20000">20k</button></div></div>
+        <div class="opt"><label>Weather</label><div class="seg" id="opt-weather"><button data-v="day" class="on">☀ Day</button><button data-v="night">☾ Night</button><button data-v="storm">⛈ Storm</button></div></div>
+        <div class="opt"><label>Chaos events</label><div class="seg" id="opt-chaos"><button data-v="1" class="on">ON</button><button data-v="0">OFF</button></div></div>
+      </div>
+      <button id="btn-custom" class="big-btn">DRAFT AN ARMY ▶</button>
+      <p class="fine">Tap a unit to select its squad · tap ground to move · tap an enemy to attack · press &amp; hold a unit for its lore ability. Left alone, everyone fights on their own.</p>
+    </div>
+  </section>
+
+  <!-- DRAFT -->
+  <section id="draft" class="screen hidden">
+    <header class="bar">
+      <button class="back" id="draft-back">✕</button>
+      <div class="title" id="draft-title">Blue drafts</div>
+      <div class="budget"><div class="budget-fill" id="budget-fill"></div><span id="budget-txt"></span></div>
+    </header>
+    <nav class="tabs" id="era-tabs"></nav>
+    <div id="unit-list" class="unit-list"></div>
+    <footer class="army-bar">
+      <div id="army-list" class="army-list"><span class="muted">Your army is empty — tap ＋ on a unit</span></div>
+      <div class="row">
+        <button id="draft-random" class="sm-btn">🎲 Random</button>
+        <button id="draft-clear" class="sm-btn">Clear</button>
+        <button id="draft-done" class="big-btn sm">PLACE ▶</button>
+      </div>
+    </footer>
+  </section>
+
+  <!-- PLACEMENT / BATTLE HUD -->
+  <section id="hud" class="screen hidden passthrough">
+    <div class="hud-top">
+      <div class="side s0"><b id="cnt0">0</b><small id="name0">Blue</small></div>
+      <div class="mid"><span id="clock">0:00</span><span id="envtxt"></span></div>
+      <div class="side s1"><small id="name1">Red</small><b id="cnt1">0</b></div>
+    </div>
+    <div class="vbar"><div id="vbar0"></div><div id="vbar1"></div></div>
+    <div id="place-help" class="place-help"></div>
+    <div class="hud-bottom">
+      <button id="btn-speed" class="sm-btn">1×</button>
+      <button id="btn-pause" class="sm-btn">❚❚</button>
+      <div id="selinfo" class="selinfo"></div>
+      <button id="btn-fight" class="big-btn sm fight">FIGHT!</button>
+      <button id="btn-quit" class="sm-btn">✕</button>
+    </div>
+    <div id="tip" class="tip hidden"></div>
+    <div id="toast" class="toast hidden"></div>
+  </section>
+
+  <!-- PREDICTION -->
+  <section id="predict" class="modal hidden">
+    <div class="panel">
+      <h2>Who wins?</h2>
+      <p id="predict-sub" class="muted"></p>
+      <div class="pick">
+        <button id="pick0" class="pick-btn s0"></button>
+        <button id="pick1" class="pick-btn s1"></button>
+      </div>
+      <button id="pick-skip" class="link">skip</button>
+    </div>
+  </section>
+
+  <!-- RESULT -->
+  <section id="result" class="modal hidden">
+    <div class="panel">
+      <h2 id="res-title"></h2>
+      <p id="res-pred" class="res-pred"></p>
+      <div id="res-mvp" class="res-mvp"></div>
+      <div class="res-cols"><div id="res0"></div><div id="res1"></div></div>
+      <p id="res-misc" class="muted"></p>
+      <div class="row">
+        <button id="res-rematch" class="big-btn sm">REMATCH</button>
+        <button id="res-menu" class="sm-btn">Menu</button>
+      </div>
+    </div>
+  </section>
+</div>
+<script src="js/units.js"></script>
+<script src="js/sim.js"></script>
+<script src="js/armies.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/render.js"></script>
+<script src="js/ui.js"></script>
+</body>
+</html>
