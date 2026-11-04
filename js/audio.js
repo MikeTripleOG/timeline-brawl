@@ -1,4 +1,4 @@
-/* Timeline Brawl — tiny WebAudio synth. No asset files. */
+/* Timeline Brawl — tiny WebAudio synth (no audio files). */
 (function (G) {
   'use strict';
   const HB = G.HB || (G.HB = {});
@@ -33,13 +33,13 @@
     s.connect(f); f.connect(g); g.connect(master); s.start(t, Math.random() * 0.5); s.stop(t + dur + 0.02);
   }
   const SFX = {
-    shot(t) {
-      if (t === 1) { if (ok('arrow', 0.09)) noise(0.08, 0.06, 2500, 2); }
-      else if (t === 2) { if (ok('bullet', 0.05)) noise(0.06, 0.12, 1800, 1); }
-      else if (t === 3) { if (ok('shell', 0.15)) { noise(0.35, 0.35, 300, 0.7); tone(90, 0.3, 'sine', 0.3, 0.4); } }
-      else if (t === 4) { if (ok('fire', 0.2)) noise(0.4, 0.12, 600, 0.5); }
-      else if (t === 5) { if (ok('missile', 0.2)) { noise(0.5, 0.15, 1200, 0.6); tone(700, 0.4, 'sawtooth', 0.05, 0.3); } }
+    shot(kind) {
+      if (kind === 'rock' || kind === 'bolt') { if (ok('rock', 0.18)) { noise(0.3, 0.2, 260, 0.7); tone(80, 0.25, 'sine', 0.2, 0.5); } }
+      else if (kind === 'javelin') { if (ok('jav', 0.1)) noise(0.12, 0.08, 1400, 1.5); }
+      else if (ok('arrow', 0.09)) noise(0.08, 0.06, 2500, 2);
     },
+    horn() { if (ok('horn', 0.8)) { tone(196, 0.7, 'sawtooth', 0.09, 1.02); tone(294, 0.6, 'sawtooth', 0.05, 1, 0.1); } },
+    thud() { if (ok('thud', 0.25)) { noise(0.25, 0.3, 180, 0.8); tone(55, 0.25, 'sine', 0.3, 0.6); } },
     clash() { if (ok('clash', 0.12)) { tone(1200 + Math.random() * 800, 0.05, 'square', 0.03); } },
     boom(big) { if (ok(big ? 'bigboom' : 'boom', big ? 0.25 : 0.12)) { noise(big ? 0.9 : 0.35, big ? 0.5 : 0.22, big ? 160 : 260, 0.6); tone(60, big ? 0.7 : 0.25, 'sine', big ? 0.4 : 0.15, 0.5); } },
     ability() { if (ok('ability', 0.25)) { [660, 880, 1320].forEach((f, k) => tone(f, 0.25, 'triangle', 0.12, 1, k * 0.07)); } },
@@ -49,12 +49,11 @@
     order() { if (ok('ord', 0.05)) { tone(600, 0.06, 'triangle', 0.08); tone(900, 0.08, 'triangle', 0.08, 1, 0.05); } },
     event(id) {
       if (!ok('event', 0.5)) return;
-      if (id === 'emp') { tone(1800, 0.9, 'sawtooth', 0.15, 0.05); noise(0.6, 0.3, 4000, 0.4); }
-      else if (id === 'aliens') { for (let k = 0; k < 6; k++) tone(400 + (k % 2) * 300, 0.18, 'sine', 0.15, 1.6, k * 0.15); }
+      if (id === 'wrath') { tone(70, 2, 'sawtooth', 0.2, 0.6); noise(1.8, 0.35, 220, 0.4); }
       else if (id === 'betrayal') { [392, 370, 311, 247].forEach((f, k) => tone(f, 0.35, 'sawtooth', 0.12, 1, k * 0.16)); }
-      else if (id === 'eclipse') { tone(110, 1.6, 'sine', 0.25, 0.5); tone(165, 1.6, 'sine', 0.15, 0.5); }
-      else if (id === 'plague') { [220, 208, 196].forEach((f, k) => tone(f, 0.5, 'triangle', 0.15, 1, k * 0.25)); }
-      else if (id === 'kamikaze') { noise(1.5, 0.35, 500, 0.3); tone(200, 1.2, 'sine', 0.15, 2); }
+      else if (id === 'breach' || id === 'keep') { noise(1.2, 0.5, 150, 0.5); tone(50, 0.9, 'sine', 0.35, 0.5); }
+      else if (id === 'relief' || id === 'held') { [392, 523, 659].forEach((f, k) => tone(f, 0.4, 'sawtooth', 0.08, 1, k * 0.18)); }
+      else if (id === 'curse') { tone(110, 1.2, 'sine', 0.2, 0.5); tone(165, 1.2, 'sine', 0.12, 0.5); }
       else { noise(1.4, 0.3, 700, 0.3); tone(150, 0.8, 'triangle', 0.15, 0.7); }
     },
     win() { if (ok('win', 1)) [523, 659, 784, 1047].forEach((f, k) => tone(f, 0.35, 'triangle', 0.15, 1, k * 0.13)); },

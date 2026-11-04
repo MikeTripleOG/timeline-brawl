@@ -1,132 +1,149 @@
-// Headless Playwright test at a phone viewport. Usage: node test/e2e.cjs [baseUrl]
-const { chromium } = require('/workspace/frontline-game/tools/node_modules/playwright-core');
-const BASE = process.argv[2] || 'http://127.0.0.1:8765/';
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+// Mobile e2e: node test/e2e.cjs [baseUrl]  (needs playwright-core + Chrome; serves nothing itself)
+const PW = process.env.PW || '/workspace/frontline-game/tools/node_modules/playwright-core';
+const { chromium } = require(PW);
+const BASE = process.argv[2] || 'http://127.0.0.1:8765/index.html';
+const SHOTS = process.env.SHOTS || '/tmp/shots';
+let pass = 0, fail = 0; const ok = (c, m) => { if (c) { pass++; console.log('  ✓ ' + m); } else { fail++; console.log('  ✗ ' + m); } };
 (async () => {
-  const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required'] });
-  const ctx = await browser.newContext({ viewport: { width: 412, height: 860 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true,
-    userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36' });
-  const page = await ctx.newPage();
-  const errors = [];
-  page.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
-  page.on('pageerror', e => errors.push('pageerror: ' + e.message));
-  page.on('requestfailed', r => errors.push('requestfailed: ' + r.url()));
-  const res = [];
-  const ok = (name, cond, info) => { res.push({ name, pass: !!cond, info }); console.log((cond ? 'PASS ' : 'FAIL ') + name + (info ? ' — ' + info : '')); };
-  const fpsSample = (ms) => page.evaluate((ms) => new Promise(r => { let n = 0; const t0 = performance.now(); (function f() { n++; if (performance.now() - t0 < ms) requestAnimationFrame(f); else r({ fps: n / (ms / 1000), t: __tb.battle && __tb.battle.t, n: __tb.battle && __tb.battle.n }); })(); }), ms);
+  const br = await chromium.launch({ executablePath: process.env.CHROME || '/usr/bin/google-chrome', args: ['--no-sandbox'] });
+  const ctx = await br.newContext({ viewport: { width: 412, height: 860 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+  const pg = await ctx.newPage(); const errs = [];
+  pg.on('console', m => { if (m.type() === 'error') errs.push(m.text()); }); pg.on('pageerror', e => errs.push('PAGEERR ' + e.message));
+  const ev = (f, a) => pg.evaluate(f, a);
+  const tapAt = async (x, y) => { await pg.touchscreen.tap(x, y); await pg.waitForTimeout(120); };
+  const drag = async (x0, y0, x1, y1, steps = 8) => { // touch drag via pointer events
+    await pg.mouse.move(x0, y0); await pg.mouse.down(); for (let i = 1; i <= steps; i++) { await pg.mouse.move(x0 + (x1 - x0) * i / steps, y0 + (y1 - y0) * i / steps); await pg.waitForTimeout(20); } await pg.mouse.up(); await pg.waitForTimeout(100); };
 
-  await page.goto(BASE, { waitUntil: 'load' });
-  ok('page title', /Timeline Brawl/.test(await page.title()));
-  ok('6 featured cards', (await page.locator('.card').count()) === 6);
+  console.log('title');
+  await pg.goto(BASE); await pg.waitForTimeout(1200);
+  ok(await pg.isVisible('text=Trial version'), 'title shows the gold "Trial version" tag');
+  await pg.screenshot({ path: SHOTS + '/e2e-title.png' });
 
-  // ---- Quick Battle: one tap to a running fight ----
-  await page.evaluate(() => { __tb.st.taps = 0; });
-  await page.locator('#btn-quick').tap();
-  await sleep(4200);
-  const q = await page.evaluate(() => ({ screen: __tb.st.screen, t: __tb.battle.t, taps: __tb.st.taps }));
-  ok('Quick Battle: 1 tap to a running battle', q.screen === 'battle' && q.t > 0.3 && q.taps === 1, JSON.stringify(q));
-  // camera follows; user pan pauses it; re-center resumes
-  await page.touchscreen.tap(200, 500);
-  await page.evaluate(() => __tb.R.panBy(80, 0));
-  await page.evaluate(() => { __tb.R.userT = 6; __tb.R.auto = false; });
-  await page.locator('#btn-menu').tap();
-  ok('corner menu opens', await page.locator('#cmenu').isVisible());
-  await page.locator('#speed-seg button[data-v="2"]').tap();
-  const badge = await page.locator('#speed-badge').textContent();
-  ok('speed state shown', badge.trim() === '2×' && (await page.locator('#speed-seg button.on').getAttribute('data-v')) === '2', badge);
-  await page.locator('#cm-center').tap();
-  ok('re-center hands camera back', await page.evaluate(() => __tb.R.auto !== false && __tb.R.userT <= 0));
+  console.log('quick battle (tap-first controls)');
+  await pg.click('#bQuick'); await pg.waitForTimeout(800);
+  ok(await ev(() => __tb.screen()) === 'battle', 'one tap starts a battle');
+  await ev(() => { __tb.R.userCam = 99; __tb.R.fit(true); });
+  const r0 = await ev(() => { const b = __tb.BR.b, r = b.regs.find(r => r.side === 0 && r.def.cls === 'inf'); const p = __tb.R.toScreen(r.x, r.y); return { id: r.id, x: p.x, y: p.y }; });
+  await tapAt(r0.x, r0.y);
+  ok(await ev(() => __tb.BR.sel) === r0.id, 'tap selects a regiment');
+  await drag(r0.x, r0.y, r0.x + 30, r0.y - 90);
+  await pg.waitForTimeout(150);
+  const ord = await ev((id) => { const r = __tb.BR.b.regs[id]; return r.order; }, r0.id);
+  ok(ord && ord.k === 'mv' && ord.f != null, 'drag issues a move with facing');
+  // tap the selected regiment's ring medallion to change formation
+  const ring = await ev(() => __tb.R.ring && __tb.R.ring.items.map(i => ({ x: i.x, y: i.y, k: i.o.k, m: i.o.m, on: i.o.on })));
+  ok(ring && ring.length >= 2 && ring.length <= 4, 'formation ring shows 2–4 options (' + (ring ? ring.length : 0) + ')');
+  const alt = ring && ring.find(o => o.k === 'fm' && !o.on);
+  if (alt) { await tapAt(alt.x, alt.y); await pg.waitForTimeout(150); ok(await ev((id) => __tb.BR.b.regs[id].form, r0.id) === alt.m, 'tapping a medallion switches formation to ' + alt.m); }
+  // tap an enemy to attack
+  const en = await ev(() => { const b = __tb.BR.b, r = b.regs.find(r => r.side === 1 && r.st === 0); const p = __tb.R.toScreen(r.x, r.y); return { id: r.id, x: p.x, y: p.y }; });
+  await tapAt(en.x, en.y); await pg.waitForTimeout(120);
+  const o2 = await ev((id) => __tb.BR.b.regs[id].order, r0.id);
+  ok(o2 && o2.k === 'at' && o2.t === en.id, 'tap an enemy with a regiment selected = attack');
+  await pg.waitForTimeout(1500); await pg.screenshot({ path: SHOTS + '/e2e-battle.png' });
+  await ev(() => __tb.ff(400)); await pg.waitForTimeout(3200);
+  ok(await pg.isVisible('#modal.on'), 'battle ends with a results scroll');
+  const watch = await ev(() => __tb.BR.lastWatch);
+  const winner = await ev(() => __tb.BR.b.winner);
+  ok(/^https?:.*#watch=/.test(watch || ''), 'results carry a #watch replay link');
+  await pg.screenshot({ path: SHOTS + '/e2e-result.png' });
+  await pg.click('[data-a=done]'); await pg.waitForTimeout(300);
 
-  // tap-select own squad, tap ground to move; hold to fire
-  const pos = await page.evaluate(() => { const b = __tb.battle; const s = b.squads.find(o => o.side === 0 && o.alive > 0); return Object.assign(__tb.R.toScreen(s.cx, s.cy), { id: s.id }); });
-  await page.touchscreen.tap(pos.x + 10, pos.y + 6); // off-centre: generous hit radius
-  await sleep(120);
-  const selId = await page.evaluate(() => __tb.st.sel);
-  ok('tap near squad selects it', selId >= 0 && await page.evaluate((i) => __tb.battle.squads[i].side === 0, selId), 'sel ' + selId);
-  pos.id = selId;
-  const g = await page.evaluate(() => __tb.R.toScreen(__tb.battle.squads[__tb.st.sel].cx, __tb.battle.squads[__tb.st.sel].cy - 90));
-  await page.touchscreen.tap(g.x, g.y);
-  await sleep(150);
-  ok('tap ground issues move order', await page.evaluate((id) => { const o = __tb.battle.squads[id].order; return o && (o.kind === 'move' || o.kind === 'attack') && __tb.battle.log.length > 0; }, pos.id));
-  await page.locator('#btn-menu').tap(); await page.locator('#cm-quit').tap();
+  console.log('replay link');
+  await pg.goto(watch); await pg.waitForTimeout(800);
+  ok(await ev(() => __tb.screen()) === 'battle' && await ev(() => __tb.BR.watch), '#watch opens a replay');
+  await ev(() => __tb.ff(400)); await pg.waitForTimeout(3000);
+  const w2 = await ev(() => __tb.BR.b.winner);
+  ok(await pg.isVisible('#modal.on') && w2 === winner, 'replay reproduces the same winner (side ' + w2 + ')');
+  await pg.click('[data-a=done]'); await pg.waitForTimeout(300);
 
-  // ---- Custom draft: fixed '+', hold-to-repeat, unspent warning ----
-  await page.locator('#btn-custom').tap();
-  await page.locator('#custom [data-mode="ai"]').tap();
-  const card = page.locator('.ucard').first();
-  const b0 = await card.locator('.add').boundingBox();
-  await card.locator('.add').tap();
-  const b1 = await card.locator('.add').boundingBox();
-  ok('＋ does not move after a tap', Math.abs(b0.x - b1.x) < 0.5 && Math.abs(b0.y - b1.y) < 0.5, b0.x.toFixed(1) + ' → ' + b1.x.toFixed(1));
-  const box = b1; await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down(); await sleep(1400); await page.mouse.up();
-  const cnt = await page.evaluate(() => Object.values(__tb.st.draft[0]).reduce((a, b) => a + b, 0));
-  ok('hold ＋ repeats', cnt > 5, 'count ' + cnt);
-  await page.locator('#draft-done').tap();
-  ok('unspent-points warning', await page.locator('#unspent').isVisible(), await page.locator('#unspent-txt').textContent());
-  await page.locator('#unspent-fill').tap();
-  await sleep(200);
-  const left = await page.evaluate(() => __tb.cfg.budget - __tb.battle.armyCost && 0);
-  ok('Auto-fill then deploy', await page.evaluate(() => __tb.st.screen) === 'place');
-  await page.locator('#btn-fight').tap();
-  const predShown = await page.locator('#predict').isVisible();
-  ok('Who wins? shown once per session (custom), with Skip', predShown && await page.locator('#pick-skip').isVisible());
-  await page.locator('#pick-skip').tap();
-  await page.locator('#btn-menu').tap(); await page.locator('#cm-quit').tap();
+  console.log('custom siege (attack)');
+  await pg.goto(BASE); await pg.waitForTimeout(800);
+  await pg.click('#bCustom'); await pg.click('[data-a=field][data-v=siegeA]'); await pg.click('[data-a=go]'); await pg.waitForTimeout(1000);
+  ok(await ev(() => !!__tb.BR.b.S && __tb.BR.b.S.segs.length > 20), 'siege battle has walls in rings (' + await ev(() => __tb.BR.b.S.segs.length) + ' segments)');
+  ok(await pg.isVisible('text=Walls'), 'siege HUD shows wall integrity');
+  // tap the trebuchet then a wall segment = wall order
+  const tre = await ev(() => { __tb.R.userCam = 99; __tb.R.fit(true); const b = __tb.BR.b, r = b.regs.find(r => r.side === 1 && r.def.wall > 0 && r.def.rng > 0) || b.regs.find(r => r.side === 1 && r.def.cls === 'sie'); const p = __tb.R.toScreen(r.x, r.y); const s = b.S.segs.filter(s => s.ring === 0 && !s.gate).sort((a, c) => Math.hypot(a.mx - r.x, a.my - r.y) - Math.hypot(c.mx - r.x, c.my - r.y))[0]; const q = __tb.R.toScreen(s.mx, s.my); return { id: r.id, x: p.x, y: p.y, sx: q.x, sy: q.y, sid: s.id }; });
+  await tapAt(tre.x, tre.y); await tapAt(tre.sx, tre.sy); await pg.waitForTimeout(150);
+  const wo = await ev((id) => __tb.BR.b.regs[id].order, tre.id);
+  ok(wo && wo.k === 'wl', 'tap a wall with a trebuchet selected = bombard order');
+  await ev(() => __tb.ff(60)); await pg.waitForTimeout(1200); await pg.screenshot({ path: SHOTS + '/e2e-siege.png' });
+  await ev(() => { const b = __tb.BR.b; for (const f of b.fac) f.auto = true; }); await ev(() => __tb.ff(500)); await pg.waitForTimeout(3000);
+  ok(await pg.isVisible('#modal.on'), 'siege ends (' + await ev(() => __tb.BR.b && (__tb.BR.b.siegeResult || (__tb.BR.b.winner === 1 ? 'attackers' : 'defenders') + ' win in the field')) + ')');
+  await pg.click('[data-a=done]');
 
-  // ---- Featured: Legion vs Abrams, prediction, order, finish, results, watch link replays identically ----
-  await page.locator('.card[data-id="legion-abrams"]').tap();
-  await page.locator('#btn-fight').tap();
-  ok('Who wins? on featured matchups', await page.locator('#predict').isVisible());
-  await page.locator('#pick button').first().tap();
-  await sleep(300);
-  await page.evaluate(() => { const b = __tb.battle; const s = b.squads.find(o => o.side === 0); b.command({ c: 'mv', s: s.id, x: s.cx + 40, y: s.cy - 20 }); });
-  await sleep(400);
-  await page.evaluate(() => __tb.fastForward(400));
-  await sleep(2600);
-  ok('result screen', await page.locator('#result').isVisible(), await page.locator('#res-title').textContent());
-  const live = await page.evaluate(() => { const S = __tb.battle.summary(); return { w: S.winner, tot: S.totals, t: Math.round(__tb.battle.t * 30), url: __tb.watchUrl() }; });
-  const hudTot = await page.evaluate(() => [0, 1].map(s => __tb.battle.sideCount(s)));
-  ok('results totals = HUD counts', JSON.stringify(hudTot) === JSON.stringify(live.tot.slice(0, 2)), JSON.stringify(hudTot));
-  const p2 = await ctx.newPage();
-  p2.on('pageerror', e => errors.push('pageerror(watch): ' + e.message));
-  await p2.goto(live.url, { waitUntil: 'load' });
-  await sleep(600);
-  const rep = await p2.evaluate(() => { __tb.fastForward(400); const S = __tb.battle.summary(); return { w: S.winner, tot: S.totals, t: Math.round(__tb.battle.t * 30), watch: __tb.st.watch }; });
-  ok('#watch= link replays the identical battle', rep.watch && rep.w === live.w && JSON.stringify(rep.tot) === JSON.stringify(live.tot) && rep.t === live.t, JSON.stringify({ live: [live.w, live.tot, live.t], rep: [rep.w, rep.tot, rep.t], len: live.url.length }));
-  await p2.close();
-  await page.screenshot({ path: 'test/result.png' });
-  await page.locator('#res-menu').tap();
+  console.log('spectate Remi vs Game Dev');
+  await pg.click('#bPlay'); await pg.click('[data-a=spec]'); await pg.click('[data-a=field]'); await pg.waitForTimeout(600);
+  ok(await ev(() => __tb.BR.spectate), 'spectate mode');
+  await ev(() => __tb.ff(600)); const sw = await ev(() => __tb.BR.b.winner); ok(sw >= 0, 'AI spectate finishes with a winner (' + await ev(() => __tb.BR.b.fac[__tb.BR.b.winner].name) + ')');
+  await pg.waitForTimeout(2800); await pg.click('[data-a=done]');
 
-  // ---- 5k units fps: 5,000 legionaries vs Abrams at 1x ----
-  await page.locator('.card[data-id="legion-abrams"]').tap();
-  await page.locator('#btn-fight').tap();
-  await page.locator('#pick-skip').tap();
-  await sleep(1500);
-  const f5 = await fpsSample(3000);
-  ok('5,000-unit battle frame rate (headless software GL)', f5.fps > 40, f5.fps.toFixed(0) + ' fps, ' + f5.n + ' units, t=' + (f5.t || 0).toFixed(1));
-  await page.locator('#btn-menu').tap(); await page.locator('#cm-quit').tap();
+  console.log('campaign (solo)');
+  await pg.click('#bPlay'); await pg.click('[data-a=solo]'); await pg.click('[data-a=seat][data-i="1"]'); await pg.click('[data-a=go]'); await pg.waitForTimeout(500);
+  await pg.click('[data-a=go]'); await pg.waitForTimeout(600);
+  ok(await ev(() => __tb.screen()) === 'map', 'campaign map opens');
+  ok(await pg.isVisible('#map .cartouche') && await pg.isVisible('#supTxt'), 'cartouche and supply panel visible');
+  // tap my army at Frostmere then Thornwood... instead: tap the capital army and an adjacent province
+  const a = await ev(() => { const st = __tb.CP.st, a = st.armies.find(x => x.f === 1 && x.p === 3); __tb.MV.center(3); const P = __tb.HB.PROVS; const p = __tb.MV.toScreen(P[3].x, P[3].y - 10); return { id: a.id, x: p.x, y: p.y }; });
+  await tapAt(a.x, a.y);
+  ok(await ev(() => __tb.MV.sel) === a.id && await pg.isVisible('#sheet.on'), 'tap my army: army sheet + highlighted roads');
+  const dest = await ev(() => { const P = __tb.HB.PROVS; const p = __tb.MV.toScreen(P[1].x, P[1].y + 15); return p; });
+  await tapAt(dest.x, dest.y);
+  ok(await ev(() => __tb.MV.arrows.length) === 1, 'tap a neighbouring province: march arrow');
+  await pg.screenshot({ path: SHOTS + '/e2e-map.png' });
+  // envoy: compose a tribute treaty
+  await pg.click('#bDiplo'); await pg.click('[data-a=env][data-i="0"]'); await pg.waitForTimeout(200);
+  ok(await pg.isVisible('text=Treaty of Tribute'), 'treaty scroll opens');
+  await pg.screenshot({ path: SHOTS + '/e2e-treaty.png' });
+  await pg.click('[data-a=send]');
+  // coalition offer to another kingdom, and a spy against the Horde
+  await pg.click('#bDiplo'); await pg.click('[data-a=env][data-i="2"]'); await pg.waitForTimeout(200);
+  await pg.click('[data-a=kind][data-v=coalition]'); await pg.waitForTimeout(150);
+  ok(await pg.isVisible('text=The Grand Coalition'), 'coalition treaty scroll between kingdoms');
+  await pg.click('[data-a=send]');
+  await pg.click('#bDiplo'); await pg.click('[data-a=spy][data-i="5"]'); await pg.waitForTimeout(150);
+  ok(await ev(() => __tb.CP.draft.sp) === 5 && await ev(() => __tb.CP.draft.of.some(o => o.kind === 'coalition')), 'spy sent at the Horde + coalition envoy drafted');
+  await pg.screenshot({ path: SHOTS + '/e2e-diplo.png' });
+  await pg.evaluate(() => document.querySelector('#sheet.on') && document.querySelector('#sheet [data-a=close], #sheetClose') && document.querySelector('#sheet [data-a=close], #sheetClose').click());
+  for (let t = 0; t < 4; t++) {
+    await pg.click('#bEnd'); await pg.waitForTimeout(400);
+    for (let k = 0; k < 6 && await pg.isVisible('#modal.on'); k++) {
+      if (await pg.isVisible('[data-a=auto]')) await pg.click('[data-a=auto]');
+      else if (await pg.isVisible('[data-a=no]')) await pg.click('[data-a=no]');
+      else if (await pg.isVisible('[data-a=t]')) break;
+      await pg.waitForTimeout(400);
+    }
+  }
+  const turn = await ev(() => __tb.CP.st.turn);
+  ok(turn >= 4 || await ev(() => __tb.CP.st.over), 'campaign advances (turn ' + turn + ')');
 
-  // ---- Spectate FFA ----
-  await page.locator('#btn-spectate').tap();
-  await sleep(1500);
-  const sp = await page.evaluate(() => ({ nF: __tb.battle.nF, names: __tb.battle.fac.map(f => f.name), spectate: __tb.ui.spectate, chips: document.querySelectorAll('.fchip').length }));
-  ok('Spectate: Remi vs Game Dev + 2 AI', sp.nF === 4 && sp.names[0] === 'Remi' && sp.names[1] === 'Game Dev' && sp.chips === 4 && sp.spectate, JSON.stringify(sp));
-  const fs = await fpsSample(3000);
-  ok('Spectate FFA frame rate (~12k units, headless)', fs.fps > 15, fs.fps.toFixed(0) + ' fps, ' + fs.n + ' units');
-  await page.evaluate(() => __tb.fastForward(30));
-  await sleep(800);
-  await page.screenshot({ path: '/tmp/e2e_spec.png' });
-  ok('meters drawn', await page.evaluate(() => [...document.querySelectorAll('.fchip .meter i')].every(i => i.style.width.endsWith('%'))));
-  // challenge with an army code
-  await page.locator('#btn-menu').tap(); await page.locator('#cm-quit').tap();
-  await page.locator('#btn-challenge').tap();
-  await page.locator('#chal-code').fill('TB-legion.2000_spartan.300');
-  await page.locator('#chal-go').tap();
-  ok('Challenge code opens draft vs challenger', await page.locator('#vs-line').isVisible(), await page.locator('#vs-line').textContent());
+  console.log('campaign battle played on the field');
+  await ev(() => { const st = __tb.CP.st; }); 
+  await pg.goto(BASE); await pg.waitForTimeout(600);
+  await ev(() => __tb.campaign([4], 11)); await pg.click('[data-a=go]'); await pg.waitForTimeout(300);
+  // march Drakonia's capital army onto the Eastern Hills (held by the Horde) -> field battle
+  await ev(() => { const st = __tb.CP.st, a = st.armies.find(x => x.f === 4 && x.p === 8); __tb.CP.draft.mv[a.id] = 11; });
+  await pg.click('#bEnd'); await pg.waitForTimeout(600);
+  let fought = false;
+  for (let k = 0; k < 6; k++) {
+    if (await pg.isVisible('[data-a=fight]')) { await pg.click('[data-a=fight]'); await pg.waitForTimeout(800); fought = true; break; }
+    if (await pg.isVisible('[data-a=no]')) await pg.click('[data-a=no]');
+    await pg.waitForTimeout(300);
+  }
+  ok(fought && await ev(() => __tb.screen()) === 'battle', 'pre-battle card → Fight opens the battle');
+  await pg.waitForTimeout(1200); await pg.screenshot({ path: SHOTS + '/e2e-campaign-battle.png' });
+  await ev(() => { const b = __tb.BR.b; for (const f of b.fac) f.auto = true; }); await ev(() => __tb.ff(600)); await pg.waitForTimeout(3000);
+  await pg.click('[data-a=done]'); await pg.waitForTimeout(500);
+  ok(await ev(() => __tb.screen()) === 'map', 'battle result returns to the map');
+  ok(await ev(() => __tb.CP.st.log.some(l => /^(Battle|Siege) of .*: /.test(l.text) && l.t === 1)), 'result written to the chronicle');
 
-  ok('no console errors', errors.length === 0, errors.slice(0, 5).join(' | '));
-  const fails = res.filter(r => !r.pass).length;
-  console.log(fails ? fails + ' FAILED' : 'ALL ' + res.length + ' PASSED');
-  await browser.close();
-  process.exit(fails ? 1 : 0);
-})();
+  console.log('pass & play');
+  await ev(() => __tb.campaign([0, 5], 3)); await pg.click('[data-a=go]'); await pg.waitForTimeout(300);
+  ok(await pg.isVisible('#cover.on'), 'hot-seat cover screen asks to pass the device');
+  await pg.click('#coverGo'); await pg.click('#bEnd'); await pg.waitForTimeout(300);
+  ok(await pg.isVisible('#cover.on') && /Crimson Horde/.test(await pg.textContent('#cover')), 'then passes to the second ruler');
+
+  ok(errs.length === 0, 'no console errors' + (errs.length ? ': ' + errs.slice(0, 3).join(' | ') : ''));
+  console.log(`\n${pass} passed, ${fail} failed`);
+  await br.close(); process.exit(fail ? 1 : 0);
+})().catch(e => { console.error(e); process.exit(2); });

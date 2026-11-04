@@ -1,1128 +1,930 @@
-/* Timeline Brawl — deterministic battle simulation (no DOM). Typed arrays + spatial hash. */
+/* Timeline Brawl v3 — deterministic regiment simulation (no DOM).
+   Regiments with facing, formation, cohesion, momentum, fatigue and morale fight on generated terrain. */
 (function (G) {
   'use strict';
   const HB = G.HB || (G.HB = {});
-  const W = 500, H = 700, CS = 10, GW = Math.ceil(W / CS), GH = Math.ceil(H / CS);
-  const DT = 1 / 30, MAXU = 14000, MAXP = 5000;
-  const NML0 = 270, NML1 = 430;
-  const D = HB.DMG, MELEE = 0, ARROW = 1, BULLET = 2, SHELL = 3, FIRE = 4, MISSILE = 5, CRUSH = 6;
-  const F_LANDED = 1, F_DECOY = 2, F_GHOST = 4, F_STEALTH = 8, F_ZOMBIE = 16, F_RTB = 32, F_TEMPLAND = 64, F_DRYMSG = 128, F_FUELMSG = 256, F_FROZEN = 512, F_LIFT = 1024;
-  const NF = 5, ALIEN = 4; // up to 4 armies + the aliens
-  const PSPEED = [0, 170, 650, 320, 120, 260, 0];
-  HB.WORLD = { W, H, NML0, NML1, DT, NF, ALIEN };
-  HB.FLAGS = { F_LANDED, F_DECOY, F_GHOST, F_STEALTH, F_ZOMBIE, F_RTB, F_TEMPLAND, F_FROZEN, F_LIFT };
+  const DT = 1 / 20, MON = 4, NS = 5;
+  const W = 800, H = 1000, CS = 10, GW = W / CS, GH = H / CS;
+  HB.WORLD = { W, H, DT, MON, NS, CS };
 
-  // Deterministic math: only + - * / and sqrt (IEEE exact) so replays match on every device/engine.
+  // Deterministic math: only + - * / and sqrt, so replays match on every device/engine.
   const PI = 3.141592653589793, TAU = 6.283185307179586, HPI = 1.5707963267948966;
-  function sind(x) {
+  function sin(x) {
     x = x - TAU * Math.floor(x / TAU + 0.5);
     if (x > HPI) x = PI - x; else if (x < -HPI) x = -PI - x;
     const x2 = x * x;
     return x * (1 - x2 / 6 * (1 - x2 / 20 * (1 - x2 / 42 * (1 - x2 / 72 * (1 - x2 / 110 * (1 - x2 / 156))))));
   }
-  function cosd(x) { return sind(x + HPI); }
-  function atand(z) { // |z| <= 1
-    const z2 = z * z;
-    return z * (0.99997726 + z2 * (-0.33262347 + z2 * (0.19354346 + z2 * (-0.11643287 + z2 * (0.05265332 + z2 * -0.01172120)))));
-  }
-  function atan2d(y, x) {
+  function cos(x) { return sin(x + HPI); }
+  function atand(z) { const z2 = z * z; return z * (0.99997726 + z2 * (-0.33262347 + z2 * (0.19354346 + z2 * (-0.11643287 + z2 * (0.05265332 + z2 * -0.01172120))))); }
+  function atan2(y, x) {
     if (x === 0 && y === 0) return 0;
     const ax = x < 0 ? -x : x, ay = y < 0 ? -y : y;
     let a = ax >= ay ? atand(ay / ax) : HPI - atand(ax / ay);
     if (x < 0) a = PI - a;
     return y < 0 ? -a : a;
   }
-  function hyp(x, y) { return Math.sqrt(x * x + y * y); }
-  HB.dmath = { sind, cosd, atan2d, hyp };
-  // deployment zones for 2-4 armies (FFA uses the corners)
-  HB.zonesFor = function (n) {
-    if (n <= 2) return [{ x0: 10, x1: 490, y0: 445, y1: 690 }, { x0: 10, x1: 490, y0: 10, y1: 255 }];
-    if (n === 3) return [{ x0: 135, x1: 365, y0: 450, y1: 690 }, { x0: 260, x1: 490, y0: 10, y1: 250 }, { x0: 10, x1: 240, y0: 10, y1: 250 }];
-    return [{ x0: 10, x1: 240, y0: 450, y1: 690 }, { x0: 260, x1: 490, y0: 10, y1: 250 }, { x0: 10, x1: 240, y0: 10, y1: 250 }, { x0: 260, x1: 490, y0: 450, y1: 690 }];
-  };
+  const hyp = (x, y) => Math.sqrt(x * x + y * y);
+  const wrap = (a) => a - TAU * Math.floor(a / TAU + 0.5);
+  const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+  const lerp = (a, b, t) => a + (b - a) * t;
+  HB.dmath = { sin, cos, atan2, hyp, wrap, clamp };
   function makeRng(seed) {
     let s = (seed >>> 0) || 0x9e3779b9;
     return function () { s ^= s << 13; s >>>= 0; s ^= s >>> 17; s ^= s << 5; s >>>= 0; return s / 4294967296; };
   }
-  const EVENTS = {
-    sandstorm: { name: 'SANDSTORM', sub: 'Range & accuracy down, the death ray is blinded', color: '#d99a3a', dur: 12 },
-    plague: { name: 'BLACK DEATH', sub: 'Plague ravages flesh and blood; no healing', color: '#3a5a2a', dur: 10 },
-    eclipse: { name: 'TOTAL ECLIPSE', sub: 'Darkness falls: all aircraft must land!', color: '#14102a', dur: 10 },
-    betrayal: { name: 'BETRAYAL!', sub: 'Part of a squad on each side switches sides', color: '#9b30ff', dur: 2 },
-    emp: { name: 'EMP BLAST', sub: 'Electronics fried: tech units stunned, aircraft drop', color: '#00e5ff', dur: 6 },
-    aliens: { name: 'ALIEN ABDUCTION', sub: 'A scout UFO beams up troops from every side', color: '#39ff6a', dur: 4 },
-    monsoon: { name: 'MONSOON', sub: 'Fires doused, bowstrings wet, gunpowder damp', color: '#2a5fb0', dur: 12 },
-  };
-  HB.EVENTS = EVENTS;
+  HB.makeRng = makeRng;
+
+  // ---------- terrain ----------
+  function makeTerrain(seed, nF, kind) {
+    const rnd = makeRng((seed ^ 0x51ed27) >>> 0);
+    const elev = new Float32Array(GW * GH), forest = new Uint8Array(GW * GH), water = new Uint8Array(GW * GH);
+    const hills = [], woods = [], villages = [];
+    const nh = kind === 'hills' ? 4 + Math.floor(rnd() * 2) : 2 + Math.floor(rnd() * 3);
+    for (let k = 0; k < nh; k++) hills.push({ x: 120 + rnd() * (W - 240), y: 200 + rnd() * (H - 400), r: 70 + rnd() * 70, h: 0.6 + rnd() * 0.4 });
+    const nw = kind === 'woods' ? 3 + Math.floor(rnd() * 2) : kind === 'snow' ? 1 : 1 + Math.floor(rnd() * 3);
+    for (let k = 0; k < nw; k++) {
+      const left = rnd() < 0.5;
+      woods.push({ x: left ? 40 + rnd() * 200 : W - 40 - rnd() * 200, y: 250 + rnd() * (H - 500), r: 45 + rnd() * 45 });
+    }
+    if (kind !== 'siege' && rnd() < 0.6) villages.push({ x: 160 + rnd() * (W - 320), y: H / 2 + (rnd() - 0.5) * 300, r: 40 + rnd() * 20 });
+    let river = null;
+    const wantRiver = kind === 'river' || (kind !== 'open' && nF === 2 && rnd() < 0.45);
+    if (wantRiver) {
+      const fords = [];
+      const nf = 2 + Math.floor(rnd() * 2);
+      for (let k = 0; k < nf; k++) fords.push(90 + (k + 0.25 + rnd() * 0.5) * ((W - 180) / nf));
+      river = { y: H / 2 + (rnd() - 0.5) * 60, a: 18 + rnd() * 22, k: 0.006 + rnd() * 0.006, ph: rnd() * 6, hw: 13, fords, fw: 30 };
+    }
+    for (let gy = 0; gy < GH; gy++) for (let gx = 0; gx < GW; gx++) {
+      const x = gx * CS + 5, y = gy * CS + 5, i = gy * GW + gx;
+      let e = 0;
+      for (const h of hills) { const d = hyp(x - h.x, y - h.y) / h.r; if (d < 1) e = Math.max(e, h.h * (1 - d * d)); }
+      elev[i] = e;
+      for (const w of woods) {
+        const wob = 1 + 0.18 * sin(x * 0.07 + w.x) * cos(y * 0.06 + w.y);
+        if (hyp(x - w.x, (y - w.y) * 0.8) < w.r * wob) forest[i] = 1;
+      }
+      for (const v of villages) if (hyp(x - v.x, y - v.y) < v.r) forest[i] = 2;
+      if (river) {
+        const ry = river.y + river.a * sin(x * river.k + river.ph);
+        if (Math.abs(y - ry) < river.hw) { water[i] = river.fords.some(f => Math.abs(x - f) < river.fw) ? 2 : 1; forest[i] = 0; }
+      }
+    }
+    if (kind === 'siege') { forest.fill(0); }
+    return { elev, forest, water, hills, woods, villages, river };
+  }
+  HB.makeTerrain = makeTerrain;
+  function cell(T, x, y) { const gx = clamp((x / CS) | 0, 0, GW - 1), gy = clamp((y / CS) | 0, 0, GH - 1); return gy * GW + gx; }
+
+  // ---------- deployment zones ----------
+  function zonesFor(n) {
+    if (n <= 2) return [{ x0: 60, x1: W - 60, y0: H - 230, y1: H - 40, f: -HPI }, { x0: 60, x1: W - 60, y0: 40, y1: 230, f: HPI }];
+    const z = [{ x0: 170, x1: W - 170, y0: H - 190, y1: H - 30, f: -HPI }, { x0: 170, x1: W - 170, y0: 30, y1: 190, f: HPI },
+      { x0: 20, x1: 180, y0: 260, y1: H - 260, f: 0 }, { x0: W - 180, x1: W - 20, y0: 260, y1: H - 260, f: PI }];
+    return z.slice(0, n);
+  }
+  HB.zonesFor = zonesFor;
+
+  // ---------- regiment geometry ----------
+  function formOf(r) { return HB.FORMS[r.form]; }
+  function geom(r) {
+    const d = r.def, F = formOf(r), n = Math.max(1, Math.ceil(r.n));
+    const sp = d.sp * F.sp;
+    let files, ranks;
+    if (d.cls === 'ele' || d.cls === 'sie' || d.cls === 'mon') { files = n; ranks = 1; }
+    else if (r.form === 'square') { files = Math.ceil(Math.sqrt(n)); ranks = files; }
+    else if (r.form === 'testudo') { files = Math.ceil(Math.sqrt(n * 1.6)); ranks = Math.ceil(n / files); }
+    else if (r.form === 'wedge') { files = Math.ceil(Math.sqrt(n * 1.4)); ranks = Math.ceil(n / files); }
+    else if (r.form === 'column') { files = d.cls === 'cav' ? 4 : 6; ranks = Math.ceil(n / files); }
+    else {
+      let rk = F.ranks; if (d.cls === 'cav') rk = r.form === 'line' ? 2 : 2; if (d.cls === 'msl') rk = r.form === 'line' ? 3 : 2;
+      ranks = Math.min(rk, n); files = Math.ceil(n / ranks); ranks = Math.ceil(n / files);
+    }
+    r.files = files; r.ranks = ranks;
+    if (d.ram || d.tower) { r.files = 4; r.ranks = 2; r.W = d.ram ? 12 : 20; r.D = d.ram ? 28 : 22; return; }
+    r.W = d.cls === 'mon' ? 34 : Math.max(sp, files * sp); r.D = d.cls === 'mon' ? 34 : Math.max(sp, ranks * sp * (d.cls === 'cav' ? 1.5 : 1));
+  }
+  function ext(r, ux, uy) { // half extent of the regiment rectangle along unit vector u
+    const fx = cos(r.f), fy = sin(r.f);
+    const a = ux * fx + uy * fy, b = -ux * fy + uy * fx;
+    return (a < 0 ? -a : a) * r.D / 2 + (b < 0 ? -b : b) * r.W / 2;
+  }
+  function zoneOf(def, ax, ay) { // where point a sits relative to regiment def's facing: 0 front, 1 flank, 2 rear
+    const ang = Math.abs(wrap(atan2(ay - def.y, ax - def.x) - def.f));
+    return ang < 0.85 ? 0 : ang < 2.2 ? 1 : 2;
+  }
+  HB.geom = geom; HB.zoneOf = zoneOf;
+
+  const ZMUL = [1, 1.5, 2.2], ZSHOCK = [1, 2.2, 3.5], ZNAME = ['front', 'flank', 'rear'];
+  const BUFFS = ['mars', 'stand', 'charge2', 'nopanic', 'berserk', 'tengri', 'sun', 'shaka', 'curse', 'ambush'];
 
   class Battle {
-    constructor(opts) {
-      this.opts = opts;
-      this.rand = makeRng(opts.seed || 12345);
-      this.t = 0; this.tick = 0; this.n = 0;
-      this.weather = opts.weather || 'day';
-      this.chaos = opts.chaos !== false;
-      this.human = opts.human || [true, false];
-      this.nF = Math.max(2, Math.min(4, opts.armies.length));
-      this.zones = HB.zonesFor(this.nF);
+    constructor(o) {
+      this.opts = o; this.seed = o.seed >>> 0;
+      this.rand = makeRng(this.seed || 1);
+      this.t = 0; this.tick = 0; this.over = false; this.winner = -1; this.winners = []; this.alliedWin = false; this.timeout = false;
+      this.weather = o.weather || 'clear'; this.tmax = o.tmax || (o.armies.length > 2 ? 420 : 300); this.title = o.title || '';
+      this.nF = Math.max(2, Math.min(4, o.armies.length));
+      this.zones = zonesFor(this.nF);
       this.homes = this.zones.map(z => ({ x: (z.x0 + z.x1) / 2, y: (z.y0 + z.y1) / 2 }));
-      this.homes[ALIEN] = { x: W / 2, y: 40 };
-      this.hos = new Uint8Array(NF * NF); this.mul = new Float32Array(NF * NF).fill(1);
-      for (let a = 0; a < NF; a++) for (let b = 0; b < NF; b++) this.hos[a * NF + b] = a !== b ? 1 : 0;
-      const N = MAXU;
-      this.x = new Float32Array(N); this.y = new Float32Array(N); this.hp = new Float32Array(N);
-      this.ti = new Uint8Array(N); this.side = new Uint8Array(N); this.sq = new Uint16Array(N);
-      this.alive = new Uint8Array(N); this.flags = new Uint16Array(N);
-      this.cd0 = new Float32Array(N); this.cd1 = new Float32Array(N); this.cd2 = new Float32Array(N);
-      this.am1 = new Float32Array(N); this.am2 = new Float32Array(N); this.fuel = new Float32Array(N);
-      this.tgt = new Int32Array(N); this.rt = new Float32Array(N);
-      this.ox = new Float32Array(N); this.oy = new Float32Array(N); this.hd = new Float32Array(N);
-      this.burnT = new Float32Array(N); this.burnD = new Float32Array(N); this.burnS = new Int16Array(N);
-      this.fearT = new Float32Array(N); this.revealT = new Float32Array(N); this.stunT = new Float32Array(N);
-      this.flash = new Float32Array(N); this.life = new Float32Array(N);
-      this.swarm = new Uint16Array(N); this.swarmPrev = new Uint16Array(N);
-      this.cellCount = new Int32Array(GW * GH + 1); this.cellStart = new Int32Array(GW * GH + 1); this.order = new Int32Array(N);
-      // projectiles
-      const P = MAXP;
-      this.np = 0;
-      this.px = new Float32Array(P); this.py = new Float32Array(P); this.tx = new Float32Array(P); this.ty = new Float32Array(P);
-      this.pt = new Float32Array(P); this.pT = new Float32Array(P); this.pd = new Float32Array(P); this.pk = new Uint8Array(P);
-      this.psp = new Float32Array(P); this.pj = new Int32Array(P); this.pside = new Uint8Array(P); this.psq = new Int16Array(P); this.pair = new Uint8Array(P);
-      this.squads = [];
-      this.fires = [];
-      this.fx = [];
-      this.events = [];
-      this.flagsEnv = { sand: 0, plague: 0, eclipse: 0, emp: 0, rain: 0 };
-      this.over = false; this.winner = -1;
-      this.stats = { abilities: 0, events: [] };
-      this.initFactions();
-      for (let s = 0; s < this.nF; s++) for (const e of opts.armies[s]) this.addSquad(s, HB.UNIT[e.type].idx, e.count, e.x, e.y, this.nF > 2 ? { maxW: this.zones[s].x1 - this.zones[s].x0 - 6 } : null);
-      this.startValue = []; for (let s = 0; s < this.nF; s++) this.startValue.push(this.sideValue(s));
-      this.chaosAt = this.chaos ? [16 + this.rand() * 8, 42 + this.rand() * 12, 75 + this.rand() * 15] : [];
-      this.usedEvents = {};
-      if (opts.forceEvent) this.chaosAt = [opts.forceEventAt || 6];
-    }
-    emit(o) { if (this.fx.length < 2500 || o.big) this.fx.push(o); }
-
-    // ---------- spawning ----------
-    addSquad(side, ti, count, cx, cy, extra) {
-      const def = HB.UNITS[ti];
-      const s = {
-        id: this.squads.length, side, ti, def, n0: count, alive: 0, cx, cy, kills: 0, kv: 0, dmg: 0, lost: 0,
-        cd: def.lore ? (def.lore.cd0 != null ? def.lore.cd0 : Math.min(def.lore.cd, 5 + this.rand() * 5)) : 999, baseTi: ti, lvl: 0, devoT: 0, devoStep: 30, devoLock: false, shield: def.shield || 0, shieldOffT: 0, abFx: 0, abT: 0, ph: 0, used: 0,
-        order: null, tgt: -1, routT: 0, routed: false, engT: 0, holdT: 0, dmgMul: 1, buffT: 0, disorderT: 0,
-        joanT: 0, joanBuffT: 0, barbara: 0, lockon: 0, invisT: 0, dazeT: 0, stunT: 0, evadeT: 0, freeAmmoT: 0,
-        zombieT: 0, immortalT: 0, chargeT: 0, chargeMul: 1, fleeT: 0, invulnT: 0, fooT: 0, openT: 0,
-        temp: false, name: def.short, label: (extra && extra.label) || null,
-      };
-      if (extra) Object.assign(s, extra);
-      this.squads.push(s);
-      const sp = Math.max(3.6, def.rad * 2.3);
-      let cols = Math.max(1, Math.ceil(Math.sqrt(count * 2.2)));
-      if (extra && extra.maxW) cols = Math.max(1, Math.min(cols, Math.floor(extra.maxW / sp)));
-      const rows = Math.ceil(count / cols);
-      for (let k = 0; k < count; k++) {
-        const c = k % cols, r = (k / cols) | 0;
-        const ox = (c - (cols - 1) / 2) * sp + (this.rand() - 0.5) * sp * 0.3;
-        const oy = (r - (rows - 1) / 2) * sp * (this.homes[side].y > H / 2 ? 1 : -1) + (this.rand() - 0.5) * sp * 0.3;
-        this.spawn(side, ti, s.id, cx + ox, cy + oy, ox, oy);
+      this.T = makeTerrain(this.seed, this.nF, o.siege ? 'siege' : o.terrain);
+      this.S = null; if (o.siege && this.initSiege) this.initSiege(o.siege);
+      this.fx = []; this.log = []; this.replay = !!o.cmds; this.net = !!o.net; this.cmdQ = o.cmds ? o.cmds.slice().sort((a, b) => a.k - b.k) : []; this.cmdI = 0; this.pending = [];
+      this.hos = new Uint8Array(NS * NS);
+      for (let a = 0; a < NS; a++) for (let b = 0; b < NS; b++) this.hos[a * NS + b] = a !== b && a < this.nF + 1 && b < this.nF + 1 ? 1 : 0;
+      this.regs = []; this.contacts = new Map(); this.prevContacts = new Map();
+      this.fac = [];
+      const facs = o.factions || [];
+      for (let s = 0; s < this.nF; s++) {
+        const fi = facs[s] || {};
+        this.fac.push({ name: fi.name || HB.SIDE_NAMES[s], color: fi.color || HB.SIDE_COLORS[s], faction: fi.faction || 'rome', cmd: fi.cmd || (s === 0 ? 'human' : 'ai'), auto: fi.cmd !== 'human',
+          faith: 30, curseCd: 15, ally: -1, allyT0: 0, oath: false, vengeT: 0, vengeOn: -1, betrayals: 0, pending: null, kills: 0, lost: 0, msDmg: 0 });
+        if (fi.oath) this.fac[s].oath = true;
+        if (fi.vengeOn != null && fi.vengeOn >= 0) { this.fac[s].vengeT = 9999; this.fac[s].vengeOn = fi.vengeOn; }
+        this.spawnArmy(s, o.armies[s] || []);
       }
-      return s;
+      this.men0 = this.regs.reduce((a, r) => a + r.n0, 0);
+      this.deaths = 0; this.bloodshed = 0; this.wrath = null; this.wrathDone = false; this.curses = 0;
+      this.fogs = []; this.winds = []; this.events = []; this.diplo = []; this.allyWinT = 0;
+      this.ai = HB.makeAI ? this.fac.map((f, s) => HB.makeAI(this, s)) : [];
+      this.stats = { abilities: 0, charges: 0, rearCharges: 0, flankHits: 0, routs: 0, rallies: 0 };
     }
-    spawn(side, ti, sqi, x, y, ox, oy) {
-      if (this.n >= MAXU) return -1;
-      const i = this.n++, d = HB.UNITS[ti], s = this.squads[sqi];
-      this.x[i] = clamp(x, 2, W - 2); this.y[i] = clamp(y, 2, H - 2);
-      this.hp[i] = d.hp; this.ti[i] = ti; this.side[i] = side; this.sq[i] = sqi; this.alive[i] = 1;
-      this.flags[i] = (d.tagset.stealth ? F_STEALTH : 0) | (d.tagset.ghost ? F_GHOST : 0) | (d.tagset.decoy ? F_DECOY : 0);
-      this.cd0[i] = this.rand() * 0.8; this.cd1[i] = this.rand() * (d.w1 ? d.w1.rof : 1); this.cd2[i] = this.rand() * (d.w2 ? d.w2.rof : 1);
-      this.am1[i] = d.w1 ? (d.w1.ammo || 1e9) : 0; this.am2[i] = d.w2 ? (d.w2.ammo || 1e9) : 0;
-      this.fuel[i] = d.fuel || 1e9; this.tgt[i] = -1; this.rt[i] = this.rand() * 0.4;
-      this.ox[i] = ox || 0; this.oy[i] = oy || 0; this.hd[i] = atan2d(H / 2 - this.homes[side].y, W / 2 - this.homes[side].x);
-      this.burnT[i] = 0; this.fearT[i] = 0; this.revealT[i] = 0; this.stunT[i] = 0; this.life[i] = -1; this.flash[i] = 0;
-      s.alive++;
-      return i;
-    }
-    sideValue(side) {
-      let v = 0;
-      for (let i = 0; i < this.n; i++) if (this.alive[i] && this.side[i] === side && this.life[i] < 0) {
-        const d = HB.UNITS[this.ti[i]]; v += d.cost * Math.max(0, Math.min(1, this.hp[i] / d.hp + 0.25)) / 1.25;
+    // entries: [{t: rosterIndex | type, x, y, f?}] using the side's faction roster
+    spawnArmy(s, entries) {
+      const fac = HB.FACTION[this.fac[s].faction] || HB.FACTIONS[0], z = this.zones[s];
+      for (const e of entries) {
+        const ro = typeof e.r === 'number' ? fac.roster[e.r] : null;
+        const r = this.addReg(s, ro ? ro.t : e.t, ro, e.x, e.y, e.f != null ? e.f : z.f);
+        if (e.h != null && e.h < 100) { r.n = Math.max(1, Math.round(r.n0 * e.h / 100)); geom(r); }
       }
-      return v;
     }
-    sideCount(side) {
-      let c = 0;
-      for (const s of this.squads) if (s.side === side && !s.temp) c += s.alive;
-      return c;
+    addReg(side, type, ro, x, y, f) {
+      const base = HB.TYPES[type], m = (ro && ro.m) || {};
+      const def = Object.assign({}, base);
+      for (const k of ['atk', 'def', 'chg', 'mor', 'rdm', 'rng', 'brace']) if (m[k]) def[k] = (def[k] || 0) * m[k];
+      const r = { id: this.regs.length, side, type, def, name: (ro && ro.name) || base.role, lore: ro && ro.lore || null,
+        n: base.men, n0: base.men, x, y, f, form: base.forms[0], morale: def.mor, coh: 1, fat: 0, mom: 0, st: 0, rallies: 0, routT: 0,
+        order: null, ammo: def.ammo || 0, rcd: 1 + (this.rand() * 1.5), cd: 6, pilum: def.pilum ? 1 : 0, kills: 0, buf: {}, hp: def.hp || 0,
+        vx: 0, vy: 0, moving: 0, hidden: 0, engaged: 0, waver: 0, panic: 0, lastHit: -9, autoT: 0, hold: 0 };
+      if (def.cls === 'mon') { r.form = 'line'; r.morale = 999; }
+      geom(r); this.regs.push(r); return r;
     }
 
-    // ---------- spatial hash ----------
-    buildGrid() {
-      const cc = this.cellCount, cs = this.cellStart, ord = this.order, n = this.n;
-      cc.fill(0);
-      for (let i = 0; i < n; i++) if (this.alive[i]) cc[cellOf(this.x[i], this.y[i])]++;
-      let acc = 0;
-      for (let c = 0; c < GW * GH; c++) { cs[c] = acc; acc += cc[c]; cc[c] = cs[c]; }
-      cs[GW * GH] = acc;
-      for (let i = 0; i < n; i++) if (this.alive[i]) ord[cc[cellOf(this.x[i], this.y[i])]++] = i;
-    }
-    // visit all alive units within radius R of (x,y); cb(j, d2) returns true to stop
-    query(x, y, R, cb) {
-      const c0 = Math.max(0, ((x - R) / CS) | 0), c1 = Math.min(GW - 1, ((x + R) / CS) | 0);
-      const r0 = Math.max(0, ((y - R) / CS) | 0), r1 = Math.min(GH - 1, ((y + R) / CS) | 0);
-      const R2 = R * R, cs = this.cellStart, ord = this.order;
-      for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
-        const cell = r * GW + c;
-        for (let k = cs[cell], e = cs[cell + 1]; k < e; k++) {
-          const j = ord[k]; const dx = this.x[j] - x, dy = this.y[j] - y, d2 = dx * dx + dy * dy;
-          if (d2 <= R2 && cb(j, d2)) return;
-        }
-      }
-    }
-    airborne(j) { return HB.UNITS[this.ti[j]].air && !(this.flags[j] & (F_LANDED | F_TEMPLAND)); }
-    visibleTo(j, i, d2) {
-      const f = this.flags[j];
-      if (f & F_GHOST) return false;
-      const sj = this.squads[this.sq[j]];
-      if (sj.invisT > 0) return this.squads[this.sq[i]].lockon > 0;
-      if ((f & F_STEALTH) && this.revealT[j] <= 0) {
-        if (sj.invisT > 0) return false;
-        return HB.UNITS[this.ti[i]].radar && d2 < 150 * 150 && !this.flagsEnv.emp;
-      }
-      return true;
-    }
-    // nearest valid enemy for unit i within R (ring search)
-    findTarget(i, R, prefSq) {
-      const x = this.x[i], y = this.y[i], side = this.side[i], d = HB.UNITS[this.ti[i]], HS = this.hos, sb = side * NF;
-      const canAir = d.canAir, radar = d.radar, lock = this.squads[this.sq[i]].lockon > 0;
-      const cx = Math.min(GW - 1, (x / CS) | 0), cy = Math.min(GH - 1, (y / CS) | 0);
-      const maxRing = Math.ceil(R / CS);
-      let best = -1, bestS = 1e18, bestRaw = 1e18;
-      const cs = this.cellStart, ord = this.order;
-      for (let ring = 0; ring <= maxRing; ring++) {
-        if (best >= 0 && (ring - 1) * CS > Math.sqrt(bestRaw) + CS) break;
-        const ra = cy - ring, rb = cy + ring, ca = cx - ring, cb = cx + ring;
-        for (let r = ra; r <= rb; r++) {
-          if (r < 0 || r >= GH) continue;
-          const edge = r === ra || r === rb;
-          for (let c = ca; c <= cb; c += edge ? 1 : (cb - ca || 1)) {
-            if (c < 0 || c >= GW) continue;
-            const cell = r * GW + c;
-            for (let k = cs[cell], e = cs[cell + 1]; k < e; k++) {
-              const j = ord[k];
-              if (!HS[sb + this.side[j]]) continue;
-              const dx = this.x[j] - x, dy = this.y[j] - y, d2 = dx * dx + dy * dy;
-              if (d2 > R * R) continue;
-              if (!canAir && this.airborne(j)) continue;
-              if (!this.visibleTo(j, i, d2)) continue;
-              let sc = d2;
-              if (prefSq >= 0 && this.sq[j] === prefSq) sc *= 0.15;
-              if (this.flags[j] & F_DECOY) { if (radar || lock) continue; sc *= 0.3; }
-              if (sc < bestS) { bestS = sc; best = j; bestRaw = Math.min(bestRaw, d2); }
-            }
-            if (!edge && cb === ca) break;
-          }
-        }
-      }
-      return best;
-    }
-
-    // ---------- damage ----------
-    damage(j, amt, dt, srcSq) {
-      if (!this.alive[j] || amt <= 0) return;
-      const d = HB.UNITS[this.ti[j]], s = this.squads[this.sq[j]];
-      if (s.invulnT > 0) return;
-      if (s.shield > 0 && s.shieldOffT <= 0) { const ab = Math.min(s.shield, amt); s.shield -= ab; amt -= ab; this.flash[j] = 0.05; if (amt <= 0) return; }
-      if (this.flags[j] & F_DECOY) { this.kill(j, srcSq, dt); return; }
-      let m = d.armorArr[dt];
-      if ((dt === MELEE || dt === CRUSH) && (d.veh || d.air)) {
-        const landed = d.air && !this.airborne(j);
-        if (d.air && !landed) return;
-        m = (landed ? 0.25 : m) + Math.min(0.2, this.swarmPrev[j] * 0.004);
-        if (this.isDry(j)) m += this.fuel[j] <= 0 ? 0.6 : 0.4; // hatches pried open
-      }
-      if (s.holdT > 0 && dt <= BULLET) m *= 0.25;
-      if (s.disorderT > 0) m *= 1.6;
-      if (s.joanBuffT > 0) m *= 0.8;
-      amt *= m;
-      if (amt <= 0) return;
-      this.hp[j] -= amt; this.flash[j] = 0.12;
-      if (srcSq >= 0) { const ss = this.squads[srcSq]; ss.dmg += amt; if (s.side === ALIEN && ss.side < NF - 1) this.fac[ss.side].msDmg += amt; }
-      if (this.hp[j] <= 0) {
-        if (s.zombieT > 0 && dt !== FIRE && dt !== SHELL && dt !== MISSILE) { this.flags[j] |= F_ZOMBIE; return; }
-        this.kill(j, srcSq, dt);
-      }
-    }
-    isDry(j) {
-      const d = HB.UNITS[this.ti[j]];
-      return d.hasAmmo && this.am1[j] <= 0 && this.am2[j] <= 0;
-    }
-    kill(j, srcSq, dt, silent) {
-      if (!this.alive[j]) return;
-      this.alive[j] = 0;
-      const d = HB.UNITS[this.ti[j]], s = this.squads[this.sq[j]];
-      s.alive--; s.lost++;
-      if (silent) return;
-      if (srcSq >= 0) { const k = this.squads[srcSq]; if (k.side !== this.side[j]) { k.kills++; k.kv += d.cost; } }
-      this.onKill(j, d, s, srcSq);
-      const x = this.x[j], y = this.y[j];
-      if (this.flags[j] & F_DECOY) { this.emit({ k: 'pop', x, y }); return; }
-      if (d.rad >= 5) {
-        this.emit({ k: 'boom', x, y, r: 26, big: true });
-        this.emit({ k: 'callout', text: d.short.toUpperCase() + ' DESTROYED!', x, y, color: '#ff5533', big: true, slow: 1.4, side: this.side[j] });
-      } else if (d.rad >= 3) this.emit({ k: 'boom', x, y, r: 12 });
-      else this.emit({ k: 'die', x, y, side: this.side[j] });
-      // immortals replacement
-      if (s.immortalT > 0 && dt !== FIRE && dt !== SHELL && dt !== MISSILE && !this.flagsEnv.plague && this.rand() < 0.6) {
-        const bk = this.backDir(s.side), bd = 14 + this.rand() * 10;
-        const ni = this.spawn(s.side, s.ti, s.id, s.cx + (this.rand() - 0.5) * 30 + bk.x * bd, s.cy + bk.y * bd, this.ox[j], this.oy[j]);
-        if (ni >= 0) this.emit({ k: 'spark', x: this.x[ni], y: this.y[ni], color: '#ffd76a' });
-      }
-    }
-
-    // ---------- projectiles ----------
-    fire(i, w, j, slot) {
-      const s = this.squads[this.sq[i]];
-      const d = HB.UNITS[this.ti[i]];
-      let acc = w.acc;
-      const env = this.flagsEnv, tdef = HB.UNITS[this.ti[j]];
-      if (env.sand) acc *= 0.6;
-      if (env.rain && (w.t === ARROW)) acc *= 0.7;
-      if ((env.rain || this.weather === 'storm') && d.era === 2 && w.t === BULLET) acc *= 0.5;
-      if ((this.weather === 'night' || env.eclipse) && !d.tech) acc *= 0.7;
-      if (this.weather === 'storm' && this.airborne(j)) acc *= 0.7;
-      if (d.tech && this.jammedAt(this.x[i], this.y[i], this.side[i]) && s.lockon <= 0) acc *= 0.25;
-      const ts = this.squads[this.sq[j]];
-      if (ts.evadeT > 0) acc *= 0.4;
-      if (this.airborne(j) && w.t === ARROW) acc *= 0.6;
-      let sp = w.sp || 0;
-      let guaranteed = false;
-      if (slot === 1 && s.barbara > 0) { s.barbara--; guaranteed = true; sp *= 3; }
-      if (w.t === MISSILE && s.lockon > 0) { s.lockon--; guaranteed = true; }
-      const hit = guaranteed || this.rand() < acc;
-      let tx = this.x[j], ty = this.y[j];
-      if (!hit) { const a = this.rand() * 6.283, r = 5 + this.rand() * (sp ? sp * 1.5 : 12); tx += cosd(a) * r; ty += sind(a) * r; }
-      const dx = tx - this.x[i], dy = ty - this.y[i], dist = Math.sqrt(dx * dx + dy * dy);
-      let dmg = w.d * s.dmgMul * (s.joanBuffT > 0 ? 1.25 : 1) * bonusMul(d, tdef) * this.mul[this.side[i] * NF + this.side[j]];
-      if (w.en) this.fac[this.side[i]].energy -= w.en;
-      if (s.chargeT > 0 && s.fleeT <= 0 && s.def.lore && s.def.lore.id === 'feigned') dmg *= 2;
-      const p = this.np < MAXP ? this.np++ : -1;
-      const T = Math.max(0.03, dist / PSPEED[w.t]);
-      if (p < 0) { this.impact(this.x[i], this.y[i], tx, ty, dmg, w.t, sp, hit ? j : -1, this.side[i], s.id, this.airborne(j)); return; }
-      this.px[p] = this.x[i]; this.py[p] = this.y[i]; this.tx[p] = tx; this.ty[p] = ty; this.pt[p] = 0; this.pT[p] = T;
-      this.pd[p] = dmg; this.pk[p] = w.t; this.psp[p] = sp; this.pj[p] = hit ? j : -1; this.pside[p] = this.side[i]; this.psq[p] = s.id;
-      this.pair[p] = this.airborne(j) ? 1 : 0;
-      if (w.t >= SHELL || this.rand() < 0.25) this.emit({ k: 'shot', t: w.t, x: this.x[i], y: this.y[i] });
-    }
-    impact(sx, sy, tx, ty, dmg, t, sp, j, side, srcSq, air) {
-      if (sp > 0) {
-        this.emit({ k: t === FIRE ? 'flame' : 'boom', x: tx, y: ty, r: sp });
-        this.query(tx, ty, sp, (k, d2) => {
-          if (!this.hos[side * NF + this.side[k]]) return false;
-          if (this.airborne(k) !== !!air) return false;
-          if (this.flags[k] & F_GHOST) return false;
-          const f = 1 - 0.5 * Math.sqrt(d2) / sp;
-          this.damage(k, dmg * f, t, srcSq);
-          return false;
-        });
-        if (t === FIRE && j >= 0 && this.alive[j]) this.ignite(j, 1.5, dmg, srcSq);
-      } else if (j >= 0 && this.alive[j]) {
-        this.damage(j, dmg, t, srcSq);
-      }
-    }
-    ignite(j, T, dps, srcSq) {
-      if (this.flagsEnv.rain || this.weather === 'storm') return;
-      this.burnT[j] = Math.max(this.burnT[j], T); this.burnD[j] = Math.max(this.burnD[j], dps); this.burnS[j] = srcSq;
-    }
-    stepProjectiles() {
-      let w = 0;
-      for (let p = 0; p < this.np; p++) {
-        this.pt[p] += DT;
-        if (this.pt[p] >= this.pT[p]) {
-          this.impact(this.px[p], this.py[p], this.tx[p], this.ty[p], this.pd[p], this.pk[p], this.psp[p], this.pj[p], this.pside[p], this.psq[p], this.pair[p]);
-          continue;
-        }
-        if (w !== p) {
-          this.px[w] = this.px[p]; this.py[w] = this.py[p]; this.tx[w] = this.tx[p]; this.ty[w] = this.ty[p]; this.pt[w] = this.pt[p];
-          this.pT[w] = this.pT[p]; this.pd[w] = this.pd[p]; this.pk[w] = this.pk[p]; this.psp[w] = this.psp[p]; this.pj[w] = this.pj[p];
-          this.pside[w] = this.pside[p]; this.psq[w] = this.psq[p]; this.pair[w] = this.pair[p];
-        }
-        w++;
-      }
-      this.np = w;
-    }
-    jammedAt(x, y, side) {
-      for (const s of this.squads) if (s.fooT > 0 && this.hos[s.side * NF + side] && s.alive > 0) {
-        const dx = s.cx - x, dy = s.cy - y; if (dx * dx + dy * dy < 260 * 260) return true;
-      }
+    // ---------- helpers ----------
+    hostile(a, b) { return this.hos[a * NS + b] === 1; }
+    allied(a, b) { return a !== b && a < this.nF && b < this.nF && this.fac[a].ally === b; }
+    friendly(a, b) { return a === b || this.allied(a, b); }
+    alive(r) { return r.st !== 2; }
+    elevAt(x, y) { return this.T.elev[cell(this.T, x, y)]; }
+    forestAt(x, y) { return this.T.forest[cell(this.T, x, y)] === 1; }
+    villageAt(x, y) { return this.T.forest[cell(this.T, x, y)] === 2; }
+    waterAt(x, y) { return this.T.water[cell(this.T, x, y)]; }
+    riverY(x) { const R = this.T.river; return R.y + R.a * sin(x * R.k + R.ph); }
+    emit(f) { this.fx.push(f); }
+    callout(text, x, y, color, big) { this.emit({ k: 'callout', text, x, y, color: color || '#ffe9b0', big: !!big }); }
+    sideStrength(s) { let n = 0; for (const r of this.regs) if (r.side === s && r.st === 0) n += r.n; return Math.round(n); }
+    sideCount(s) { let n = 0; for (const r of this.regs) if (r.side === s && r.st !== 2) n += r.n; return Math.round(n); }
+    unbroken(s) { for (const r of this.regs) if (r.side === s && r.st === 0) return true; return false; }
+    visibleTo(r, viewer) {
+      if (viewer < 0 || r.side === viewer || this.friendly(r.side, viewer) || r.side === MON) return true;
+      if (!r.hidden) return true;
+      for (const o of this.regs) if (o.st === 0 && this.friendly(o.side, viewer) && hyp(o.x - r.x, o.y - r.y) < 60 + o.W / 2) return true;
       return false;
     }
+    fatMul(r) { return r.fat > 40 ? Math.max(0.55, 1 - (r.fat - 40) / 120) : 1; }
+    effForm(r, key) { const v = formOf(r)[key]; return lerp(1, v, r.coh); }
+    atkMul(a, b) {
+      const da = a.def, db = b.def; let m = da.atk * this.effForm(a, 'atk') * this.fatMul(a) * (0.6 + 0.4 * a.coh);
+      if (a.buf.mars > 0) m *= 1.4; if (a.buf.berserk > 0) m *= 2; if (a.buf.sun > 0 && da.cls === 'inf') m *= 1.5; if (a.buf.curse > 0) m *= 0.7;
+      if (a.waver) m *= 0.85;
+      const bc = db.cls;
+      if (da.brace > 0 && (bc === 'cav' || bc === 'ele')) m *= da.brace >= 3 ? 2 : 1.6;
+      if (da.cls === 'cav' && (bc === 'msl' || bc === 'sie')) m *= 1.8;
+      if (da.cls === 'ele' && (bc === 'inf' || bc === 'cav' || bc === 'msl')) m *= 1.3;
+      if (bc === 'sie') m *= 2;
+      if (da.cls === 'cav' && bc === 'ele') m *= 0.6;
+      const fa = this.fac[a.side], fb = this.fac[b.side];
+      if (fa && fb) {
+        if (fa.vengeT > 0 && fa.vengeOn === b.side) m *= 1.35;
+        if (a.buf.ambush > 0 && fa.ambushOn === b.side) m *= 1.6;
+        if (fa.ally >= 0) m *= 1 + Math.min(0.2, (this.t - fa.allyT0) / 300);
+        if (fa.oath && a.lore) m *= 0.95;
+      }
+      m *= 1 + 0.6 * clamp(this.elevAt(a.x, a.y) - this.elevAt(b.x, b.y), -0.6, 0.6);
+      return m;
+    }
+    defMul(b, zone) {
+      const db = b.def; let m = db.def * this.fatMul(b) * (zone === 0 ? this.effForm(b, 'front') : this.effForm(b, 'flank'));
+      if (b.buf.stand > 0 && zone === 0) m *= 2; if (b.buf.berserk > 0) m *= 0.7;
+      if (this.waterAt(b.x, b.y) === 2) m *= 0.75;
+      if (b.st === 1) m *= 0.4;
+      return m;
+    }
+    braced(b, zone) {
+      if (b.st !== 0 || b.def.brace <= 0 || b.coh < 0.4 || this.waterAt(b.x, b.y)) return 0;
+      const br = formOf(b).brace;
+      let k = br === 'all' ? 1 : br === 'front' && zone === 0 ? 1 : br === 'stand' && zone === 0 && !b.moving ? 0.55 : 0;
+      return k * b.def.brace * b.coh;
+    }
 
-    // ---------- main step ----------
+    // ---------- commands (replayable) ----------
+    command(c) {
+      if (this.replay || this.net || this.over) return;
+      const o = Object.assign({}, c);
+      if (o.x != null) o.x = Math.round(o.x); if (o.y != null) o.y = Math.round(o.y);
+      if (o.f != null) o.f = Math.round(o.f);
+      this.pending.push(o);
+    }
+    // lockstep / host-authoritative online play: commands arrive in tick-stamped frames
+    feed(cmds) { for (const c of cmds) this.cmdQ.push(c); }
+    hash() { // cheap FNV-1a over the state that matters, for desync checks
+      let h = 0x811c9dc5 | 0; const mix = (v) => { h ^= v | 0; h = Math.imul(h, 16777619); };
+      mix(this.tick);
+      for (const r of this.regs) { mix(Math.round(r.x * 8)); mix(Math.round(r.y * 8)); mix(Math.round(r.n * 64)); mix(Math.round(r.morale * 16)); mix(r.st); mix(Math.round(r.coh * 256)); }
+      for (const f of this.fac) mix(Math.round(f.faith * 16));
+      if (this.S) for (const sg of this.S.segs) mix(Math.round(sg.hp * 8));
+      return h >>> 0;
+    }
+    applyCmds() {
+      if (this.net) { while (this.cmdI < this.cmdQ.length && this.cmdQ[this.cmdI].k <= this.tick) { const c = this.cmdQ[this.cmdI++]; this.log.push(c); this.exec(c); } return; }
+      if (this.replay) { while (this.cmdI < this.cmdQ.length && this.cmdQ[this.cmdI].k <= this.tick) this.exec(this.cmdQ[this.cmdI++]); return; }
+      for (const c of this.pending) { c.k = this.tick; this.log.push(c); this.exec(c); }
+      this.pending.length = 0;
+    }
+    exec(c) {
+      const r = c.s != null ? this.regs[c.s] : null;
+      switch (c.c) {
+        case 'mv': if (r && r.st === 0) { r.order = { k: 'mv', x: c.x, y: c.y, f: c.f != null && c.f > -900 ? c.f * PI / 180 : null }; r.hold = 0; } break;
+        case 'at': { const t = this.regs[c.t]; if (r && r.st === 0 && t && this.alive(t)) {
+          if (!this.hostile(r.side, t.side)) { this.emit({ k: 'deny', side: r.side, msg: this.wrath ? 'Truce! The gods are watching.' : 'Not an enemy' }); break; }
+          r.order = { k: 'at', t: t.id }; r.hold = 0; } break; }
+        case 'fm': if (r && r.st === 0 && r.def.forms.includes(c.m)) this.setForm(r, c.m); break;
+        case 'ab': if (r) this.activate(r, true); break;
+        case 'cu': { const t = this.regs[c.t]; if (t) this.curse(c.a, t, true); break; }
+        case 'pr': this.propose(c.a, c.b); break;
+        case 'ac': this.accept(c.a, c.b); break;
+        case 'dc': { const f = this.fac[c.a]; if (f.pending && f.pending.from === c.b) { f.pending = null; this.diploEv('decline', c.b, c.a, f.name + ' declines ' + this.fac[c.b].name + "'s alliance"); } break; }
+        case 'bt': if (this.fac[c.a].ally === c.b) this.betray(c.a, c.b); break;
+        case 'au': this.fac[c.a].auto = !!c.on; break;
+        case 'wl': if (r && r.st === 0 && this.S && this.S.segs[c.w]) { r.order = { k: 'wl', w: c.w }; r.hold = 0; } break;
+      }
+    }
+    setForm(r, m) {
+      if (r.form === m) return;
+      const old = r.form; r.form = m; geom(r);
+      r.coh = Math.min(r.coh, r.engaged ? 0.45 : 0.75); r.mom = 0;
+      this.emit({ k: 'form', id: r.id, from: old, to: m });
+    }
+
+    // ---------- the tick ----------
     step() {
       if (this.over) return;
-      this.t += DT; this.tick++;
-      if (this.fx.length > 4000) this.fx.length = 0;
       this.applyCmds();
-      this.updateEvents();
-      this.updateWorld();
-      this.buildGrid();
-      this.updateSquads();
-      this.updateUnits();
-      this.separate();
-      this.stepProjectiles();
-      this.updateFires();
-      if (this.tick % 15 === 0) this.checkEnd();
+            for (let s = 0; s < this.nF; s++) if (this.fac[s].auto && this.ai[s] && (this.tick + s * 5) % 20 === 0) this.ai[s].think();
+      if (this.wrath && this.wrath.mon) this.monsterThink();
+      if (this.S) this.siegeStep();
+      this.findContacts();
+      this.melee();
+      this.missiles();
+      this.move();
+      this.updateState();
+      if (this.tick % 20 === 0) { this.updateMeters(); if (this.nF >= 3) this.diplomacy(); this.checkEnd(); }
+      this.t += DT; this.tick++;
     }
 
-    updateEvents() {
-      const env = this.flagsEnv;
-      if (this.chaosAt.length && this.t >= this.chaosAt[0]) {
-        this.chaosAt.shift();
-        const pool = Object.keys(EVENTS).filter(k => !this.usedEvents[k]);
-        let id = this.opts.forceEvent || pool[(this.rand() * pool.length) | 0];
-        if (id) { this.usedEvents[id] = 1; this.startEvent(id); }
-      }
-      for (let k = this.events.length - 1; k >= 0; k--) {
-        const e = this.events[k]; e.t -= DT;
-        if (e.t <= 0) { this.events.splice(k, 1); this.endEvent(e.id); }
-      }
-      // plague damage
-      if (env.plague && this.tick % 10 === 0) {
-        for (let i = 0; i < this.n; i++) if (this.alive[i]) {
-          const d = HB.UNITS[this.ti[i]];
-          if (d.veh || d.air || d.tagset.siege || d.tagset.ghost) continue;
-          this.damage(i, d.hp * (d.tech ? 0.012 : 0.03), CRUSH, -1);
-        }
-      }
-    }
-    startEvent(id) {
-      const E = EVENTS[id], env = this.flagsEnv;
-      this.events.push({ id, t: E.dur, dur: E.dur, color: E.color, name: E.name });
-      this.stats.events.push(id);
-      this.emit({ k: 'event', id, text: E.name, sub: E.sub, color: E.color, big: true, slow: 1.2 });
-      if (id === 'sandstorm') env.sand = 1;
-      if (id === 'plague') env.plague = 1;
-      if (id === 'monsoon') { env.rain = 1; this.fires.length = 0; for (let i = 0; i < this.n; i++) this.burnT[i] = 0; }
-      if (id === 'eclipse' || id === 'emp') {
-        if (id === 'eclipse') env.eclipse = 1; else env.emp = 1;
-        for (let i = 0; i < this.n; i++) if (this.alive[i]) {
-          const d = HB.UNITS[this.ti[i]];
-          if (id === 'emp' && d.tech) { this.stunT[i] = Math.max(this.stunT[i], E.dur); const sq = this.squads[this.sq[i]]; if (sq.shield > 0 || d.shield) { sq.shield = 0; sq.shieldOffT = 12; } }
-          if (d.air && this.airborne(i) && (id === 'eclipse' || d.tech)) {
-            this.flags[i] |= F_TEMPLAND;
-            this.emit({ k: 'callout', text: d.short.toUpperCase() + ' FORCED DOWN!', x: this.x[i], y: this.y[i], color: E.color, big: true });
-          }
-        }
-      }
-      if (id === 'betrayal') {
-        for (let side = 0; side < this.nF; side++) {
-          const to = this.otherSide(side); if (to < 0) continue;
-          const cands = this.squads.filter(s => s.side === side && !s.temp && s.alive >= 8 && !s.def.veh && !s.def.air);
-          if (!cands.length) continue;
-          const s = cands[(this.rand() * cands.length) | 0];
-          const take = Math.floor(s.alive * 0.12);
-          const ns = this.addSquad(to, s.ti, 0, s.cx, s.cy, { label: 'Traitor ' + s.def.short, routed: true, traitorOf: side });
-          ns.n0 = take; ns.cd = 999;
-          let moved = 0;
-          for (let i = 0; i < this.n && moved < take; i++) if (this.alive[i] && this.sq[i] === s.id) {
-            this.sq[i] = ns.id; this.side[i] = to; s.alive--; s.n0--; ns.alive++; moved++; this.tgt[i] = -1;
-          }
-          this.emit({ k: 'callout', text: moved + ' ' + s.def.short.toUpperCase() + ' DEFECT!', x: s.cx, y: s.cy, color: '#c77dff', big: true });
-        }
-      }
-      if (id === 'aliens') {
-        const ux = 80 + this.rand() * 340, uy = 200 + this.rand() * 300;
-        this.emit({ k: 'ufo', x: ux, y: uy, big: true });
-        for (let side = 0; side < this.nF; side++) {
-          let budget = this.sideValue(side) * 0.08;
-          const idx = [];
-          for (let i = 0; i < this.n; i++) if (this.alive[i] && this.side[i] === side && this.life[i] < 0 && !(this.flags[i] & F_DECOY)) idx.push(i);
-          for (let k = idx.length - 1; k > 0; k--) { const r = (this.rand() * (k + 1)) | 0; const t = idx[k]; idx[k] = idx[r]; idx[r] = t; }
-          let taken = 0;
-          for (const i of idx) {
-            const c = HB.UNITS[this.ti[i]].cost;
-            if (c > budget) continue;
-            budget -= c; taken++;
-            this.emit({ k: 'beam', x: this.x[i], y: this.y[i], ux, uy });
-            this.kill(i, -1, MELEE, true);
-            if (budget < 1) break;
+    findContacts() {
+      const R = this.regs, C = this.contacts; this.prevContacts = C; this.contacts = new Map();
+      for (const r of R) { r.engaged = 0; r.cs = null; }
+      for (let i = 0; i < R.length; i++) {
+        const a = R[i]; if (a.st === 2) continue;
+        for (let j = i + 1; j < R.length; j++) {
+          const b = R[j]; if (b.st === 2 || !this.hostile(a.side, b.side)) continue;
+          const dx = b.x - a.x, dy = b.y - a.y, d = hyp(dx, dy); if (d > 140) continue;
+          if (this.S && this.wallBetween(a, b)) continue;
+          const ux = d > 0 ? dx / d : 1, uy = d > 0 ? dy / d : 0;
+          const gap = d - ext(a, ux, uy) - ext(b, -ux, -uy);
+          if (gap < 2) {
+            (a.cs || (a.cs = [])).push(b); (b.cs || (b.cs = [])).push(a);
+            if (a.st === 0) a.engaged = 1; if (b.st === 0) b.engaged = 1;
+            const key = i * 4096 + j; this.contacts.set(key, 1);
+            if (!this.prevContacts.has(key)) { this.impact(a, b); this.impact(b, a); }
           }
         }
       }
     }
-    endEvent(id) {
-      const env = this.flagsEnv;
-      if (id === 'sandstorm') env.sand = 0;
-      if (id === 'plague') env.plague = 0;
-      if (id === 'monsoon') env.rain = 0;
-      if (id === 'eclipse') env.eclipse = 0;
-      if (id === 'emp') env.emp = 0;
-      if (id === 'eclipse' || id === 'emp') {
-        if (env.eclipse || env.emp) return;
-        for (let i = 0; i < this.n; i++) if (this.flags[i] & F_TEMPLAND) {
-          this.flags[i] &= ~F_TEMPLAND;
-          if (this.fuel[i] > 0 && this.alive[i]) this.emit({ k: 'callout', text: 'TAKING OFF', x: this.x[i], y: this.y[i], color: '#fff' });
-        }
-      }
-    }
-    darkNow() { return this.weather === 'night' || this.flagsEnv.eclipse; }
-    sunnyNow() { const e = this.flagsEnv; return this.weather === 'day' && !e.eclipse && !e.sand && !e.rain; }
-
-    updateSquads() {
-      const S = this.squads, ns = S.length;
-      const sx = new Float64Array(ns), sy = new Float64Array(ns), sc = new Int32Array(ns);
-      for (let i = 0; i < this.n; i++) if (this.alive[i]) { const q = this.sq[i]; sx[q] += this.x[i]; sy[q] += this.y[i]; sc[q]++; }
-      const retarget = this.tick % 15 === 0;
-      for (const s of S) {
-        if (sc[s.id]) { s.cx = sx[s.id] / sc[s.id]; s.cy = sy[s.id] / sc[s.id]; }
-        s.alive = sc[s.id];
-        // timers
-        for (const k of ['holdT', 'buffT', 'disorderT', 'joanT', 'joanBuffT', 'invisT', 'dazeT', 'stunT', 'evadeT', 'freeAmmoT', 'zombieT', 'immortalT', 'chargeT', 'fleeT', 'invulnT', 'fooT', 'routT', 'engT', 'shieldOffT', 'abFx']) if (s[k] > 0) s[k] -= DT;
-        if (s.buffT <= 0) s.dmgMul = 1;
-        if (s.ph === 1 && s.fleeT <= 0) this.feignedTurn(s);
-        if (s.alive <= 0) continue;
-        if (s.cd > 0 && s.cd < 900) s.cd -= DT;
-        if (s.invisT <= 0 && s.wasInvis) { s.wasInvis = false; if (s.def.lore && s.def.lore.id === 'phila') { s.dazeT = 1; this.emit({ k: 'callout', text: 'SEALs REAPPEAR!', x: s.cx, y: s.cy, color: '#5fd0ff' }); } }
-        if (s.zombieT <= 0 && s.wasZombie) {
-          s.wasZombie = false;
-          for (let i = 0; i < this.n; i++) if (this.alive[i] && this.sq[i] === s.id && (this.flags[i] & F_ZOMBIE)) { this.flags[i] &= ~F_ZOMBIE; if (this.hp[i] <= 0) this.kill(i, -1, MELEE, false); }
-        }
-        if (s.joanT > 0) {
-          if (s.alive < s.n0 * 0.25) { s.joanT = 0; this.emit({ k: 'callout', text: 'THE BANNER FALLS', x: s.cx, y: s.cy, color: '#aaa' }); }
-          else for (const o of S) if (!this.hos[s.side * NF + o.side] && o.alive > 0) { const dx = o.cx - s.cx, dy = o.cy - s.cy; if (dx * dx + dy * dy < 160 * 160) { o.joanBuffT = 0.6; o.routT = 0; } }
-        }
-        if (s.openT > 0) {
-          s.openT -= DT;
-          if (s.openT <= 0) this.trojanOpen(s);
-        }
-        // order upkeep
-        if (s.order) {
-          s.order.t -= DT;
-          if (s.order.kind === 'move') {
-            const dx = s.order.x - s.cx, dy = s.order.y - s.cy;
-            if (!s.order.arrived && dx * dx + dy * dy < 15 * 15) { s.order.arrived = true; s.order.t = Math.min(s.order.t, 8); }
-          }
-          if (s.order.kind === 'attack' && (!S[s.order.sq] || S[s.order.sq].alive <= 0)) s.order = null;
-          if (s.order && s.order.t <= 0) s.order = null;
-        }
-        // morale
-        if (!s.routed && !s.temp && s.alive < s.n0 * 0.4 && s.n0 >= 8 && !s.def.tagset.fearless && !s.def.veh && !s.def.air && !s.def.tagset.siege && s.joanBuffT <= 0) {
-          s.routed = true;
-          const lowM = this.fac[s.side] && this.fac[s.side].morale < 20 ? 0.25 : 0;
-          if (this.rand() < (s.def.tagset.disc ? 0.25 : 0.6) + lowM) { if (this.fac[s.side]) this.fac[s.side].morale -= 4; s.routT = 3.5; this.emit({ k: 'callout', text: s.def.short.toUpperCase() + ' ROUT!', x: s.cx, y: s.cy, color: '#ddd', tip: 'rout' }); }
-        }
-        if (retarget) s.tgt = this.pickSquadTarget(s);
-        // abilities
-        if (s.def.lore && s.cd <= 0 && (this.tick + s.id) % 15 === 0 && s.abT <= 0) {
-          if (!this.payBlock(s) && this.abilityCond(s)) this.activate(s, false);
-        }
-        if (s.abT > 0) s.abT -= DT;
-      }
-    }
-    pickSquadTarget(s) {
-      if (s.order && s.order.kind === 'attack') return s.order.sq;
-      let best = -1, bd = 1e18, anyBest = -1, anyD = 1e18;
-      for (const o of this.squads) {
-        if (!this.hos[s.side * NF + o.side] || o.alive <= 0 || o.def.tagset.ghost || o.def.tagset.decoy) continue;
-        const dx = o.cx - s.cx, dy = o.cy - s.cy, d2 = dx * dx + dy * dy;
-        if (d2 < anyD) { anyD = d2; anyBest = o.id; }
-        const air = o.def.air && this.squadAirborne(o);
-        if (air && !s.def.canAir) continue;
-        if (o.invisT > 0) continue;
-        if (d2 < bd) { bd = d2; best = o.id; }
-      }
-      return best >= 0 ? best : anyBest;
-    }
-    squadAirborne(o) {
-      for (let i = 0; i < this.n; i++) if (this.alive[i] && this.sq[i] === o.id) return this.airborne(i);
-      return false;
-    }
-    enemiesNear(x, y, R, side, filt) {
-      let c = 0;
-      this.query(x, y, R, (j) => { if (this.hos[side * NF + this.side[j]] && !(this.flags[j] & (F_GHOST | F_DECOY)) && (!filt || filt(j))) c++; return false; });
-      return c;
-    }
-
-    // ---------- lore abilities ----------
-    abilityCond(s) {
-      const id = s.def.lore.id, S = this.squads, tgt = S[s.tgt];
-      const dist = tgt ? hyp(tgt.cx - s.cx, tgt.cy - s.cy) : 1e9;
-      switch (id) {
-        case 'thermopylae': return s.engT > 0 && this.enemiesNear(s.cx, s.cy, 60, s.side) >= s.alive * 1.3;
-        case 'mars': return (s.engT > 0 || s.alive < s.n0 * 0.8) && !this.flagsEnv.eclipse;
-        case 'immortal': return s.alive < s.n0 * 0.85 && !this.flagsEnv.plague;
-        case 'ra': return dist < 130 && !this.darkNow();
-        case 'deathray': return this.sunnyNow() && this.bigTargetNear(s, 320) >= 0;
-        case 'trojan': return this.t > 6;
-        case 'berserk': return s.engT > 0;
-        case 'agincourt': return !this.flagsEnv.rain && this.weather !== 'storm' && this.enemiesNear(s.cx, s.cy, 150, s.side) >= 12;
-        case 'grail': return s.alive < s.n0 * 0.75 && !this.flagsEnv.plague;
-        case 'feigned': return dist < 100 && tgt && (tgt.def.m > 0) && !tgt.def.veh;
-        case 'greekfire': return !this.flagsEnv.rain && this.weather !== 'storm' && this.enemiesNear(s.cx, s.cy, 70, s.side) >= 3;
-        case 'kamikaze': return this.squads.some(o => this.hos[s.side * NF + o.side] && o.alive > 0 && o.def.air && this.squadAirborne(o)) || this.enemyCount(s.side) > this.sideCount(s.side) * 3 && dist < 150;
-        case 'tell': return this.bigTargetNear(s, 250, 100) >= 0;
-        case 'joan': return s.engT > 0 || S.some(o => o.side === s.side && o.routT > 0) || dist < 120;
-        default: return this.condExt(s, id, dist, tgt);
-        case 'wings': return dist < 110;
-        case 'barbara': return this.enemiesNear(tgt ? tgt.cx : s.cx, tgt ? tgt.cy : s.cy, 25, s.side) >= 8 && dist < 220;
-        case 'smoke': return s.engT > 0 && s.alive < s.n0;
-        case 'angels': return s.alive < s.n0 * 0.5;
-        case 'deserters': return this.nmlCluster(s) != null;
-        case 'ghostarmy': return dist < 260;
-        case 'foo': return dist < 300;
-        case 'phila': return s.engT > 0 && this.enemiesNear(s.cx, s.cy, 30, s.side, (j) => HB.UNITS[this.ti[j]].m > 0) >= 3;
-        case 'roswell': return this.bigTargetNear(s, 260, 500) >= 0;
-        case 'montauk': case 'desertstorm': { let low = false; for (let i = 0; i < this.n; i++) if (this.alive[i] && this.sq[i] === s.id && this.hp[i] < s.def.hp * 0.5) low = true; return low; }
-        case 'ghostkyiv': return dist < 300;
-      }
-      return false;
-    }
-    bigTargetNear(s, R, minCost) {
-      const sb = s.side * NF;
-      let best = -1, bv = -1;
-      this.query(s.cx, s.cy, R, (j) => {
-        if (!this.hos[sb + this.side[j]] || (this.flags[j] & (F_GHOST | F_DECOY))) return false;
-        const d = HB.UNITS[this.ti[j]];
-        const ok = minCost ? d.cost >= minCost : (d.veh || d.air || d.tagset.siege);
-        if (ok && d.cost > bv) { bv = d.cost; best = j; }
-        return false;
-      });
-      return best;
-    }
-    nmlCluster(s) {
-      let sx = 0, sy = 0, c = 0;
-      for (let i = 0; i < this.n; i++) if (this.alive[i] && this.hos[s.side * NF + this.side[i]] && this.y[i] > NML0 && this.y[i] < NML1 && !this.airborne(i) && this.life[i] < 0) {
-        const dx = this.x[i] - s.cx, dy = this.y[i] - s.cy;
-        if (dx * dx + dy * dy < 240 * 240) { sx += this.x[i]; sy += this.y[i]; c++; }
-      }
-      return c >= 15 ? { x: sx / c, y: sy / c } : null;
-    }
-    // manual trigger from press-and-hold
-    tryAbility(sqi) {
-      const s = this.squads[sqi];
-      if (!s || !s.def.lore || s.alive <= 0) return { ok: false, msg: 'No ability' };
-      if (s.cd > 0) return { ok: false, msg: s.cd > 900 ? 'Already used' : 'Ready in ' + Math.ceil(s.cd) + 's' };
-      const blocked = this.blockedReason(s) || this.payBlock(s);
-      if (blocked) return { ok: false, msg: blocked };
-      return this.activate(s, true) ? { ok: true } : { ok: false, msg: 'No valid target' };
-    }
-    blockedReason(s) {
-      const id = s.def.lore.id, e = this.flagsEnv;
-      if (id === 'mars' && e.eclipse) return 'Bad omen: eclipse!';
-      if ((id === 'grail' || id === 'immortal') && e.plague) return 'Black Death blocks it';
-      if (id === 'deathray' && !this.sunnyNow()) return 'Needs clear sunlight';
-      if (id === 'ra' && this.darkNow()) return 'Ra sleeps at night';
-      if ((id === 'agincourt' || id === 'greekfire') && (e.rain || this.weather === 'storm')) return 'Too wet!';
-      if (id === 'trojan' && this.t < 1) return 'Wait for the battle';
-      return null;
-    }
-    activateCore(s, manual) {
-      const id = s.def.lore.id, L = s.def.lore, S = this.squads;
-      const tgt = S[s.tgt];
-      const out = (text, color, opts) => this.emit(Object.assign({ k: 'callout', text, x: s.cx, y: s.cy, color: color || HB.ERAS[s.def.era].color, big: true, ability: true, side: s.side, tip: 'lore' }, opts || {}));
-      switch (id) {
-        case 'thermopylae': s.holdT = 7; break;
-        case 'mars': s.dmgMul = 1.6; s.buffT = 6; if (!this.flagsEnv.plague) this.healSquad(s, 0.25); break;
-        case 'immortal': s.immortalT = 8; break;
-        case 'ra': s.chargeT = 4; s.chargeMul = 3; break;
-        case 'deathray': {
-          const j = this.bigTargetNear(s, 320); if (j < 0) return false;
-          const d = HB.UNITS[this.ti[j]];
-          this.burnT[j] = 6; this.burnD[j] = (d.hp * 0.05 + 5) / Math.max(0.25, d.armorArr[FIRE]); this.burnS[j] = s.id;
-          for (let i = 0; i < this.n; i++) if (this.alive[i] && this.sq[i] === s.id) this.emit({ k: 'ray', x1: this.x[i], y1: this.y[i], x2: this.x[j], y2: this.y[j] });
-          break;
-        }
-        case 'trojan': {
-          let horse = -1; for (let i = 0; i < this.n; i++) if (this.alive[i] && this.sq[i] === s.id) horse = i;
-          if (horse < 0) return false;
-          const ex = this.enemyCentroid(s.side);
-          this.x[horse] = clamp(ex.x + (this.rand() - 0.5) * 60, 20, W - 20);
-          { const vx = ex.x - s.cx, vy = ex.y - s.cy, vl = hyp(vx, vy) || 1; this.x[horse] = clamp(ex.x + vx / vl * 70 + (this.rand() - 0.5) * 60, 20, W - 20); this.y[horse] = clamp(ex.y + vy / vl * 70, 25, H - 25); }
-          s.openT = 2.5; s.cd = 999;
-          out('A GIFT APPEARS...', '#e8b04a', { x: this.x[horse], y: this.y[horse] });
-          this.stats.abilities++;
-          return true;
-        }
-        case 'berserk': s.zombieT = 5; s.wasZombie = true; s.dmgMul = 1.5; s.buffT = 5; break;
-        case 'agincourt': {
-          let shots = 0;
-          for (let i = 0; i < this.n; i++) if (this.alive[i] && this.sq[i] === s.id) {
-            const j = this.tgt[i] >= 0 && this.alive[this.tgt[i]] ? this.tgt[i] : this.findTarget(i, 150, -1);
-            if (j < 0) continue;
-            const w = { r: 160, d: s.def.w1.d * 2, rof: 1, t: ARROW, acc: 0.65, air: true };
-            for (let k = 0; k < 3; k++) { const jj = k === 0 ? j : this.findTarget(i, 150, -1); if (jj >= 0) { this.fire(i, w, jj, 0); shots++; } }
-          }
-          if (!shots) return false;
-          break;
-        }
-        case 'grail': this.healSquad(s, 1); s.invulnT = 2.5; break;
-        case 'feigned': s.fleeT = 2.5; s.chargeT = 6.5; s.ph = 1; break;
-        case 'greekfire': {
-          const c = tgt ? { x: tgt.cx, y: tgt.cy } : null; if (!c) return false;
-          const fx = s.cx + clamp(c.x - s.cx, -70, 70), fy = s.cy + clamp(c.y - s.cy, -70, 70);
-          this.fires.push({ x: fx, y: fy, r: 30, t: 6, dps: 10, side: s.side, sq: s.id });
-          this.emit({ k: 'firepool', x: fx, y: fy, r: 30 });
-          break;
-        }
-        case 'kamikaze': {
-          s.cd = 999;
-          this.emit({ k: 'event', id: 'kamikaze', text: 'KAMIKAZE!', sub: 'The divine wind scatters the enemy', color: '#7fb3ff', big: true, slow: 1.5 });
-          this.fires = this.fires.filter(f => f.side === s.side);
-          for (let i = 0; i < this.n; i++) if (this.alive[i] && this.hos[s.side * NF + this.side[i]]) {
-            const d = HB.UNITS[this.ti[i]];
-            if (d.air && this.airborne(i)) {
-              this.stunT[i] = 8; this.fuel[i] *= 0.6;
-              this.x[i] = 20 + this.rand() * (W - 40); this.y[i] = 20 + this.rand() * (H - 40);
-
-            } else if (!d.veh) {
-              const dx = this.x[i] - s.cx, dy = this.y[i] - s.cy, dd = hyp(dx, dy);
-              if (dd < 200 && dd > 0.01) { const push = 45 * (1 - dd / 200); this.x[i] = clamp(this.x[i] + dx / dd * push, 2, W - 2); this.y[i] = clamp(this.y[i] + dy / dd * push, 2, H - 2); this.stunT[i] = 1.5; }
-            }
-          }
-          this.stats.abilities++;
-          return true;
-        }
-        case 'tell': {
-          const j = this.bigTargetNear(s, 250, 100); if (j < 0) return false;
-          const d = HB.UNITS[this.ti[j]];
-          this.emit({ k: 'ray', x1: s.cx, y1: s.cy, x2: this.x[j], y2: this.y[j], color: '#ffffff' });
-          if (this.squads[this.sq[j]].invulnT <= 0) {
-            this.hp[j] -= d.hp * 0.35; this.flash[j] = 0.3;
-            if (this.hp[j] <= 0) this.kill(j, s.id, MISSILE);
-          }
-          break;
-        }
-        case 'joan': s.joanT = 8; break;
-        case 'wings': {
-          s.chargeT = 3; s.chargeMul = 2.5;
-          const fx = tgt ? tgt.cx : s.cx, fy = tgt ? tgt.cy : s.cy;
-          this.query((s.cx + fx) / 2, (s.cy + fy) / 2, 90, (j) => {
-            if (!this.hos[s.side * NF + this.side[j]]) return false;
-            const d = HB.UNITS[this.ti[j]];
-            if (d.tagset.disc || d.veh || d.air || d.tagset.fearless || d.tagset.siege) return false;
-            this.fearT[j] = 2.5; return false;
-          });
-          break;
-        }
-        case 'barbara': s.barbara = 3; break;
-        case 'smoke': {
-          s.invisT = 3;
-          const ec = this.enemyCentroid(s.side), vx = ec.x - s.cx, vy = ec.y - s.cy, vl = hyp(vx, vy) || 1;
-          for (let i = 0; i < this.n; i++) if (this.alive[i] && this.sq[i] === s.id) {
-            this.emit({ k: 'smoke', x: this.x[i], y: this.y[i] });
-            this.x[i] = clamp(this.x[i] + vx / vl * 50, 2, W - 2); this.y[i] = clamp(this.y[i] + vy / vl * 50, 2, H - 2); this.revealT[i] = 0;
-          }
-          break;
-        }
-        case 'angels': {
-          const bk = this.backDir(s.side);
-          const ns = this.addSquad(s.side, HB.UNIT.angel.idx, 20, clamp(s.cx + bk.x * 30, 20, W - 20), clamp(s.cy + bk.y * 30, 20, H - 20), { temp: true, label: 'Angels of Mons', cd: 999 });
-          for (let i = 0; i < this.n; i++) if (this.alive[i] && this.sq[i] === ns.id) this.life[i] = 7;
-          break;
-        }
-        case 'deserters': {
-          const c = this.nmlCluster(s); if (!c) return false;
-          const ns = this.addSquad(s.side, HB.UNIT.deserter.idx, 15, c.x, c.y, { label: 'Wild Deserters', cd: 999 });
-          for (let i = 0; i < this.n; i++) if (this.alive[i] && this.sq[i] === ns.id) this.emit({ k: 'dirt', x: this.x[i], y: this.y[i] });
-          out("THEY CAME FROM NO MAN'S LAND!", '#9fd36b', { x: c.x, y: c.y });
-          this.stats.abilities++;
-          s.cd = L.cd; s.abT = 1;
-          return true;
-        }
-        case 'ghostarmy': {
-          const ns = this.addSquad(s.side, HB.UNIT.decoy.idx, 0, s.cx, s.cy, { temp: true, label: 'Ghost Army', cd: 999 });
-          for (let k = 0; k < 4; k++) {
-            const a = k * 1.57 + this.rand(), i = this.spawn(s.side, ns.ti, ns.id, s.cx + cosd(a) * 30, s.cy + sind(a) * 30, 0, 0);
-            if (i >= 0) this.life[i] = 12;
-          }
-          ns.n0 = 4;
-          break;
-        }
-        case 'foo': s.fooT = 6; break;
-        case 'phila': {
-          const ec = this.enemyCentroid(s.side);
-          let ax = s.cx - ec.x, ay = s.cy - ec.y; const al = hyp(ax, ay) || 1;
-          const lat = this.rand() < 0.5 ? -1 : 1;
-          const px = clamp(ec.x + (ax / al) * 110 + (-ay / al) * 70 * lat, 20, W - 20), py = clamp(ec.y + (ay / al) * 110 + (ax / al) * 70 * lat, 20, H - 20);
-          for (let i = 0; i < this.n; i++) if (this.alive[i] && this.sq[i] === s.id) {
-            this.emit({ k: 'warp', x: this.x[i], y: this.y[i] });
-            this.x[i] = clamp(px + this.ox[i] * 0.6 + (this.rand() - 0.5) * 8, 2, W - 2);
-            this.y[i] = clamp(py + this.oy[i] * 0.6 + (this.rand() - 0.5) * 8, 2, H - 2);
-            this.emit({ k: 'warp', x: this.x[i], y: this.y[i] });
-          }
-          s.invisT = 4; s.wasInvis = true;
-          break;
-        }
-        case 'roswell': s.lockon = 2; break;
-        case 'desertstorm': s.invulnT = 4; this.healSquad(s, 0.2); break;
-        case 'montauk': if (!this.montauk(s)) return false; break;
-        case 'ghostkyiv': s.freeAmmoT = 6; s.evadeT = 6; break;
-        default: if (!this.activateExt(s, id, manual, out)) return false;
-      }
-      s.cd = L.cd; s.abT = 1;
-      this.stats.abilities++;
-      out(L.name + '!', null, { slow: s.def.cost >= 400 || ['kamikaze', 'thermopylae', 'agincourt', 'tell', 'deathray', 'phila', 'berserk'].includes(id) ? 1.1 : 0, manual });
-      return true;
-    }
-    trojanOpen(s) {
-      let horse = -1; for (let i = 0; i < this.n; i++) if (this.alive[i] && this.sq[i] === s.id) horse = i;
-      if (horse < 0) { this.emit({ k: 'callout', text: 'THE HORSE BURNED - NO ONE SURVIVED', x: s.cx, y: s.cy, color: '#aaa', big: true }); return; }
-      const hs = this.addSquad(s.side, HB.UNIT.hoplite.idx, 30, this.x[horse], this.y[horse], { label: 'Trojan Hoplites', cd: 999 });
-      this.emit({ k: 'callout', text: 'THE TROJAN HORSE OPENS!', x: this.x[horse], y: this.y[horse], color: '#e8b04a', big: true, slow: 1.3, ability: true, tip: 'lore' });
-      void hs;
-    }
-    healSquad(s, frac) {
-      for (let i = 0; i < this.n; i++) if (this.alive[i] && this.sq[i] === s.id) {
-        const d = HB.UNITS[this.ti[i]]; this.hp[i] = Math.min(d.hp, Math.max(0, this.hp[i]) + d.hp * frac);
-      }
-      this.emit({ k: 'heal', x: s.cx, y: s.cy });
-    }
-    enemyCentroid(side) {
-      let sx = 0, sy = 0, c = 0;
-      for (const s of this.squads) if (this.hos[side * NF + s.side] && s.alive > 0 && !s.temp) { sx += s.cx * s.alive; sy += s.cy * s.alive; c += s.alive; }
-      return c ? { x: sx / c, y: sy / c } : { x: W / 2, y: H / 2 };
-    }
-    updateFires() {
-      for (let k = this.fires.length - 1; k >= 0; k--) {
-        const f = this.fires[k]; f.t -= DT;
-        if (f.t <= 0 || this.flagsEnv.rain) { this.fires.splice(k, 1); continue; }
-        if (this.tick % 3 === 0) this.query(f.x, f.y, f.r, (j) => {
-          if ((f.side >= 0 && !this.hos[f.side * NF + this.side[j]]) || this.airborne(j)) return false;
-          this.damage(j, f.dps * DT * 3, FIRE, f.sq); return false;
-        });
-      }
-    }
-
-    // ---------- units ----------
-    updateUnits() {
-      const n = this.n, S = this.squads, env = this.flagsEnv;
-      this.swarmPrev.set(this.swarm.subarray(0, n)); this.swarm.fill(0, 0, n);
-      const rangeMul = env.sand ? 0.6 : (this.darkNow() ? 0.8 : 1);
-      for (let i = 0; i < n; i++) {
-        if (!this.alive[i]) continue;
-        const d = HB.UNITS[this.ti[i]], s = S[this.sq[i]];
-        if (this.life[i] > 0) { this.life[i] -= DT; if (this.life[i] <= 0) { this.kill(i, -1, MELEE, true); if (d.tagset.ghost) this.emit({ k: 'smoke', x: this.x[i], y: this.y[i], color: '#cfe8ff' }); continue; } }
-        if (this.burnT[i] > 0) {
-          this.burnT[i] -= DT;
-          if (env.rain || this.weather === 'storm') this.burnT[i] = 0;
-          if (this.tick % 6 === 0) { this.damage(i, this.burnD[i] * DT * 6, FIRE, this.burnS[i]); if (this.tick % 12 === 0) this.emit({ k: 'flame', x: this.x[i], y: this.y[i], r: 3 }); if (!this.alive[i]) continue; }
-        }
-        if (this.flash[i] > 0) this.flash[i] -= DT;
-        if (this.revealT[i] > 0) this.revealT[i] -= DT;
-        if (this.fearT[i] > 0) this.fearT[i] -= DT;
-        if (this.cd0[i] > 0) this.cd0[i] -= DT;
-        if (this.cd1[i] > 0) this.cd1[i] -= DT;
-        if (this.cd2[i] > 0) this.cd2[i] -= DT;
-        if (this.stunT[i] > 0) { this.stunT[i] -= DT; if (this.stunT[i] <= 0) this.flags[i] &= ~(F_FROZEN | F_LIFT); continue; }
-        if (d.powered && this.fac[this.side[i]].dark && (d.veh || d.air)) continue; // power out: vehicles and aircraft go dark
-        if (s.stunT > 0 || s.openT > 0) continue;
-        if (d.air) { this.updateAir(i, d, s, rangeMul); continue; }
-        if (d.tagset.decoy) continue;
-        // ---- ground ----
-        let spd = d.spd * (env.sand ? 0.8 : 1) * (env.plague && !d.veh ? 0.85 : 1);
-        if (s.chargeT > 0) spd *= (s.fleeT > 0 ? 1.3 : (s.def.lore && s.def.lore.id === 'feigned' ? 1 : 2));
-        if (s.holdT > 0) spd = 0;
-        // fleeing (rout / fear / feigned retreat)
-        if (s.routT > 0 || this.fearT[i] > 0 || s.fleeT > 0) {
-          const e = s.tgt >= 0 ? S[s.tgt] : null;
-          let ax = this.x[i] - (e ? e.cx : W / 2), ay = this.y[i] - (e ? e.cy : H / 2);
-          if (Math.abs(ay) < 5 && Math.abs(ax) < 5) { const bk = this.backDir(s.side); ax = bk.x * 10; ay = bk.y * 10; }
-          this.moveDir(i, ax, ay, spd * (s.fleeT > 0 ? 1 : 0.9), d);
-          continue;
-        }
-        // retarget
-        this.rt[i] -= DT;
-        let j = this.tgt[i];
-        const ordered = s.order;
-        if (j >= 0 && (!this.alive[j] || !this.hos[this.side[i] * NF + this.side[j]] || (!d.canAir && this.airborne(j)) || ((this.flags[j] & F_STEALTH) && this.revealT[j] <= 0 && !d.radar) || S[this.sq[j]].invisT > 0)) { j = -1; this.tgt[i] = -1; this.rt[i] = 0; }
-        if (this.rt[i] <= 0) {
-          this.rt[i] = 0.35 + this.rand() * 0.3;
-          const R = d.maxR ? d.maxR * rangeMul + 20 : 55;
-          j = this.findTarget(i, R, ordered && ordered.kind === 'attack' ? ordered.sq : s.tgt);
-          this.tgt[i] = j;
-        }
-        // movement goal
-        let gx = -1, gy = -1, dj = 1e9;
-        if (j >= 0) { const dx = this.x[j] - this.x[i], dy = this.y[j] - this.y[i]; dj = Math.sqrt(dx * dx + dy * dy); }
-        const contact = j >= 0 ? d.rad + HB.UNITS[this.ti[j]].rad + 1.5 : 0;
-        let attacked = false;
-        if (j >= 0 && !(s.dazeT > 0)) {
-          // melee
-          if (d.m > 0 && dj <= contact && !this.airborne(j)) {
-            if (this.cd0[i] <= 0) {
-              this.cd0[i] = d.mrof * (0.85 + this.rand() * 0.3);
-              let dmg = d.m * s.dmgMul * (s.joanBuffT > 0 ? 1.25 : 1) * bonusMul(d, HB.UNITS[this.ti[j]]) * this.mul[this.side[i] * NF + this.side[j]];
-              if (s.chargeT > 0 && s.fleeT <= 0) { const td = HB.UNITS[this.ti[j]]; if (!td.tagset.spear) dmg *= s.chargeMul; }
-              this.swarm[j]++;
-              this.damage(j, dmg, MELEE, s.id);
-              if (this.flags[i] & F_STEALTH) this.revealT[i] = 2;
-              if (this.rand() < 0.08) this.emit({ k: 'clash', x: this.x[j], y: this.y[j] });
-            }
-            attacked = true; s.engT = 1.5;
-            const ts = S[this.sq[j]]; ts.engT = 1.5;
-          } else {
-            // ranged weapons (fire every ready weapon in range)
-            for (let k = 1; k <= 2; k++) {
-              const w = k === 1 ? d.w1 : d.w2; if (!w) continue;
-              const am = k === 1 ? this.am1[i] : this.am2[i]; if (am <= 0) continue;
-              if (w.en && this.fac[this.side[i]].dark) continue;
-              if (dj > w.r * rangeMul) continue;
-              const air = this.airborne(j); if (air && !w.air) continue;
-              let jj = j;
-              const td = HB.UNITS[this.ti[j]];
-              if (!air && d.m > 0 && w.d * td.armorArr[w.t] < 0.15 && d.m * td.armorArr[0] >= w.d * td.armorArr[w.t]) continue; // pointless volley: close to melee
-              if (w.heavy && !(td.veh || td.air || td.tagset.siege)) { jj = this.bigTargetNear({ cx: this.x[i], cy: this.y[i], side: this.side[i] }, w.r * rangeMul); if (jj < 0) continue; }
-              attacked = true;
-              if ((k === 1 ? this.cd1[i] : this.cd2[i]) > 0) continue;
-              if (k === 1) this.cd1[i] = w.rof * (0.9 + this.rand() * 0.2); else this.cd2[i] = w.rof * (0.9 + this.rand() * 0.2);
-              if (!(k === 1 && s.freeAmmoT > 0)) { if (k === 1) this.am1[i]--; else this.am2[i]--; }
-              this.fire(i, w, jj, k);
-              if (this.flags[i] & F_STEALTH) this.revealT[i] = 2;
-              if (d.hasAmmo && this.am1[i] <= 0 && this.am2[i] <= 0 && !(this.flags[i] & F_DRYMSG)) {
-                this.flags[i] |= F_DRYMSG;
-                if (d.rad >= 4 || d.veh) this.emit({ k: 'callout', text: d.short.toUpperCase() + ' OUT OF AMMO!', x: this.x[i], y: this.y[i], color: '#ffcc00', big: true, slow: d.cost >= 1000 ? 1.2 : 0, tip: 'ammo' });
-              }
-            }
-            if (attacked) s.engT = Math.max(s.engT, 0.5);
-          }
-        }
-        // movement
-        if (spd <= 0) continue;
-        if (d.veh) { this.vehicleMove(i, d, s, j, dj, attacked, spd); continue; }
-        if (ordered && ordered.kind === 'move') {
-          if (ordered.arrived) { if (attacked || j < 0 || dj > 40) continue; }
-          else { if (attacked && d.m > 0 && dj <= contact) continue; gx = ordered.x + this.ox[i] * 0.7; gy = ordered.y + this.oy[i] * 0.7; this.moveTo(i, gx, gy, spd, d); continue; }
-        }
-        if (j >= 0 && d.tagset.kite && dj < 45 && !this.isDry(i) && HB.UNITS[this.ti[j]].m > 0 && !this.airborne(j) && !HB.UNITS[this.ti[j]].veh) {
-          this.moveDir(i, this.x[i] - this.x[j], this.y[i] - this.y[j], spd * 0.9, d); continue;
-        }
-        if (attacked) continue;
-        if (j >= 0) {
-          // ranged units with no usable ammo close to melee
-          this.moveTo(i, this.x[j], this.y[j], spd, d);
-        } else if (s.tgt >= 0 && S[s.tgt]) {
-          const o = S[s.tgt];
-          const ddc = hyp(o.cx - this.x[i], o.cy - this.y[i]), om = o.alive < 6 ? Math.min(0.5, ddc / 500) : 0.5;
-          this.moveTo(i, o.cx + this.ox[i] * om, o.cy + this.oy[i] * om, spd, d);
-        }
-      }
-    }
-    feignedTurn(s) {
-      s.ph = 2;
-      let c = 0;
-      this.query(s.cx, s.cy, 140, (j) => {
-        if (!this.hos[s.side * NF + this.side[j]]) return false;
-        const d = HB.UNITS[this.ti[j]];
-        if (d.tagset.disc || d.veh || d.air) return false;
-        const t = this.squads[this.sq[j]]; if (t.disorderT <= 0) { t.disorderT = 4; c++; }
-        return false;
-      });
-      this.emit({ k: 'callout', text: c ? 'THEY TOOK THE BAIT!' : 'NOBODY FELL FOR IT', x: s.cx, y: s.cy, color: c ? '#b48cff' : '#aaa', big: !!c });
-    }
-    moveTo(i, gx, gy, spd, d) {
-      const dx = gx - this.x[i], dy = gy - this.y[i], dd = Math.sqrt(dx * dx + dy * dy);
-      if (dd < 0.5) return;
-      const st = Math.min(dd, spd * DT);
-      this.x[i] = clamp(this.x[i] + dx / dd * st, 2, W - 2); this.y[i] = clamp(this.y[i] + dy / dd * st, 2, H - 2);
-      this.hd[i] = atan2d(dy, dx);
-      if (d.fuel) this.useFuel(i, d, DT);
-    }
-    moveDir(i, dx, dy, spd, d) {
-      const dd = Math.sqrt(dx * dx + dy * dy) || 1;
-      this.x[i] = clamp(this.x[i] + dx / dd * spd * DT, 2, W - 2); this.y[i] = clamp(this.y[i] + dy / dd * spd * DT, 2, H - 2);
-      this.hd[i] = atan2d(dy, dx);
-    }
-    useFuel(i, d, amt) {
-      if (!d.fuel) return true;
-      this.fuel[i] -= amt;
-      if (this.fuel[i] <= 0) {
-        this.fuel[i] = 0;
-        if (!(this.flags[i] & F_FUELMSG)) {
-          this.flags[i] |= F_FUELMSG;
-          this.emit({ k: 'callout', text: d.short.toUpperCase() + (d.air ? ' OUT OF FUEL - LANDING!' : ' OUT OF FUEL!'), x: this.x[i], y: this.y[i], color: '#ffcc00', big: true, slow: d.cost >= 1000 ? 1.2 : 0, tip: 'fuel' });
-        }
-        return false;
-      }
-      return true;
-    }
-    vehicleMove(i, d, s, j, dj, attacked, spd) {
-      if (this.fuel[i] <= 0) return;
-      const dry = this.isDry(i);
-      const o = s.order;
-      let mx = 0, my = 0, want = false;
-      // threats in melee range -> back off while shooting
-      let tx = 0, ty = 0, tc = 0;
-      this.query(this.x[i], this.y[i], d.rad + 22, (k) => {
-        if (this.hos[this.side[i] * NF + this.side[k]] && HB.UNITS[this.ti[k]].m > 0 && !this.airborne(k)) { tx += this.x[k]; ty += this.y[k]; tc++; }
-        return false;
-      });
-      if (o && o.kind === 'move' && !o.arrived) { mx = o.x - this.x[i]; my = o.y - this.y[i]; want = true; }
-      else if (dry) { const hm = this.homes[this.side[i]]; mx = hm.x - this.x[i]; my = hm.y - this.y[i]; want = Math.abs(my) + Math.abs(mx) > 14; if (tc) { mx = this.x[i] - tx / tc; my = this.y[i] - ty / tc; want = true; } }
-      else if (tc) { mx = this.x[i] - tx / tc; my = this.y[i] - ty / tc; want = true; }
-      else if (!attacked) {
-        if (j >= 0) { mx = this.x[j] - this.x[i]; my = this.y[j] - this.y[i]; want = true; }
-        else if (s.tgt >= 0) { const e = this.squads[s.tgt]; mx = e.cx - this.x[i]; my = e.cy - this.y[i]; want = true; }
-      }
-      if (!want) return;
-      const dd = Math.sqrt(mx * mx + my * my) || 1;
-      // crowd slows vehicles
-      const slow = tc > 6 ? (dry ? 0 : 0.35) : tc > 2 ? (dry ? 0.3 : 0.6) : 1; // a dry tank gets bogged down by the swarm
-      const st = spd * slow * DT;
-      this.x[i] = clamp(this.x[i] + mx / dd * st, 4, W - 4); this.y[i] = clamp(this.y[i] + my / dd * st, 4, H - 4);
-      this.hd[i] = atan2d(my, mx);
-      this.useFuel(i, d, DT);
-      // crush infantry under the tracks
-      if (this.tick % 3 === 0 && !d.hover) this.query(this.x[i], this.y[i], d.rad, (k) => {
-        if (this.hos[this.side[i] * NF + this.side[k]] && !HB.UNITS[this.ti[k]].veh && !this.airborne(k)) this.damage(k, 2.5 * slow, CRUSH, s.id);
-        return false;
-      });
-    }
-    updateAir(i, d, s, rangeMul) {
-      const f = this.flags[i];
-      if (f & (F_LANDED | F_TEMPLAND)) return; // grounded: sitting duck
-      const isPlane = d.spd > 80;
-      if (!this.useFuel(i, d, DT * (s.freeAmmoT > 0 ? 3 : 1))) { this.flags[i] |= F_LANDED; this.emit({ k: 'dust', x: this.x[i], y: this.y[i] }); if (isPlane) this.hp[i] *= 0.5; return; }
-      const dry = this.isDry(i);
-      if (dry || (f & F_RTB)) {
-        if (!(f & F_RTB)) { this.flags[i] |= F_RTB; this.emit({ k: 'callout', text: d.short.toUpperCase() + ' RETURNING TO BASE', x: this.x[i], y: this.y[i], color: '#ffcc00', big: true, tip: 'rtb' }); }
-        const hm = this.homes[this.side[i]];
-        const dy = hm.y - this.y[i], dx0 = hm.x - this.x[i];
-        if (Math.abs(dy) < 6 && Math.abs(dx0) < 8) { this.flags[i] |= F_LANDED; this.emit({ k: 'callout', text: d.short.toUpperCase() + ' LANDED - SWARM IT!', x: this.x[i], y: this.y[i], color: '#ff7744', big: true, slow: 1, tip: 'landed' }); return; }
-        this.moveDir(i, dx0, dy, Math.min(d.spd * (isPlane ? 0.6 : 1), hyp(dx0, dy) / DT), d);
+    // charge impact on first contact
+    impact(a, b) {
+      if (a.st !== 0 || a.mom < 0.35 || a.def.chg < 0.6 || a.def.cls === 'mon' || b.def.cls === 'mon') return;
+      const zone = zoneOf(b, a.x, a.y);
+      let chg = a.def.chg * this.effForm(a, 'chg') * a.mom * (a.buf.charge2 > 0 ? 2 : 1) * (1 + 0.9 * clamp(this.elevAt(a.x, a.y) - this.elevAt(b.x, b.y), -0.5, 0.5));
+      const fr = Math.min(a.files, a.def.cls === 'ele' ? a.files : b.files + 3);
+      const br = this.braced(b, zone);
+      const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+      this.stats.charges++;
+      if ((a.def.cls === 'cav' || a.def.cls === 'ele') && br >= 1) {
+        const loss = Math.min(a.n * 0.75, b.files * br * a.mom * 0.5 / a.def.def * (a.def.cls === 'ele' ? 0.25 : 1));
+        this.hurt(a, loss, b, 0, 0.8);
+        a.morale -= 20 * a.mom; a.coh = Math.max(0, a.coh - 0.5); a.mom = 0; a.buf.charge2 = 0;
+        this.hurt(b, fr * chg * 0.08 / b.def.def, a, 0, 0.5);
+        this.emit({ k: 'impact', x: cx, y: cy, zone: 0, braced: 1, side: a.side, vs: b.side, power: loss, ang: a.f });
+        this.callout('BRACED!', cx, cy - 10, '#ffe08a');
         return;
       }
-      if (s.dazeT > 0) return;
-      // target
-      this.rt[i] -= DT;
-      let j = this.tgt[i];
-      if (j >= 0 && (!this.alive[j] || !this.hos[this.side[i] * NF + this.side[j]])) j = -1;
-      if (this.rt[i] <= 0 || (j < 0 && this.tick % 6 === i % 6)) { this.rt[i] = 0.4; j = this.findTarget(i, d.maxR * rangeMul + 60, s.order && s.order.kind === 'attack' ? s.order.sq : s.tgt); this.tgt[i] = j; }
-      let gx, gy;
-      if (s.order && s.order.kind === 'move' && !s.order.arrived) { gx = s.order.x; gy = s.order.y; }
-      else if (j >= 0) { gx = this.x[j]; gy = this.y[j]; }
-      else if (s.tgt >= 0) { gx = this.squads[s.tgt].cx; gy = this.squads[s.tgt].cy; }
-      else { gx = W / 2; gy = H / 2; }
-      const dx = gx - this.x[i], dy = gy - this.y[i], dd = Math.sqrt(dx * dx + dy * dy) || 1;
-      if (isPlane) {
-        // strafing runs: dive at the enemy squad, extend past it, turn back
-        if (s.order && s.order.kind === 'move' && !s.order.arrived) { /* fly to the ordered point */ }
-        else if (s.tgt >= 0) { gx = this.squads[s.tgt].cx; gy = this.squads[s.tgt].cy; }
-        const ddx = gx - this.x[i], ddy = gy - this.y[i], dg = Math.sqrt(ddx * ddx + ddy * ddy);
-        if (this.revealT[i] > 0) this.revealT[i] -= DT; // reused as 'extend' timer for planes
-        else if (dg < 25) this.revealT[i] = 1.3;
-        else {
-          let da = atan2d(ddy, ddx) - this.hd[i]; while (da > Math.PI) da -= 6.283; while (da < -Math.PI) da += 6.283;
-          this.hd[i] += clamp(da, -1.9 * DT, 1.9 * DT);
+      if (br > 0) chg /= 1 + br;
+      let dmg = fr * chg * ZMUL[zone] / this.defMul(b, zone) * 0.5;
+      if (a.def.cls === 'ele') dmg *= 0.75;
+      dmg = Math.min(dmg, b.n * 0.65);
+      this.hurt(b, dmg, a, zone, 0);
+      const shock = (8 + dmg / b.n0 * 50) * ZSHOCK[zone] / this.depthK(b) * (1 - 0.6 * clamp(this.elevAt(b.x, b.y) - this.elevAt(a.x, a.y), 0, 0.6));
+      if (!(b.buf.stand > 0 || b.buf.berserk > 0)) b.morale -= shock;
+      b.coh = Math.max(0, b.coh - [0.25, 0.5, 0.85][zone]);
+      a.fat += 8; a.buf.charge2 = 0;
+      const f = this.fac[a.side]; if (f) f.faith = Math.min(100, f.faith + 3 + zone * 2);
+      if (zone === 2) this.stats.rearCharges++; else if (zone === 1) this.stats.flankHits++;
+      this.emit({ k: 'impact', x: cx, y: cy, zone, side: a.side, vs: b.side, power: dmg, ang: atan2(b.y - a.y, b.x - a.x), cav: a.def.cls !== 'inf' ? 1 : 0, id: b.id });
+      if (zone === 2) this.callout('REAR CHARGE!', cx, cy - 12, '#ffcf4a', true);
+      else if (zone === 1) this.callout('FLANKED!', cx, cy - 12, '#ffb04a', true);
+      else if (dmg > 10) this.callout('CHARGE!', cx, cy - 10, '#ffe9b0');
+      a.mom = 0.15;
+    }
+    depthK(r) { return clamp(r.ranks / 4, 0.75, 1.5); }
+    hurt(b, loss, a, zone, moraleK) {
+      if (loss <= 0 || b.st === 2) return;
+      if (b.def.cls === 'mon') {
+        b.hp -= loss * 2; if (a && a.side < this.nF) { this.fac[a.side].msDmg += loss * 2; }
+        if (a) a.kills += loss * 0.1; return;
+      }
+      if (b.def.mass) loss /= b.def.mass; // one elephant soaks the blows of several men
+      loss = Math.min(loss, b.n);
+      b.n -= loss; this.deaths += loss; b.lastHit = this.t;
+      if (a) { a.kills += loss; if (a.side < this.nF) { const fa = this.fac[a.side]; fa.kills += loss; fa.faith = Math.min(100, fa.faith + loss * 0.1); } }
+      if (b.side < this.nF) this.fac[b.side].lost += loss;
+      if (moraleK && !(b.buf.stand > 0 || b.buf.berserk > 0)) b.morale -= loss / b.n0 * 100 * moraleK * ZSHOCK[zone] / this.depthK(b) * (b.def.mass ? 0.55 : 1) * (1 - 0.5 * clamp(this.elevAt(b.x, b.y) - (a ? this.elevAt(a.x, a.y) : 0), 0, 0.6));
+      if (b.n < 1) { b.n = 0; this.killReg(b, a); }
+    }
+    killReg(b, a) {
+      if (b.st === 2) return;
+      const was = b.st; b.st = 2; b.n = 0; b.order = null;
+      this.emit({ k: 'destroyed', id: b.id, x: b.x, y: b.y, side: b.side });
+      if (was === 0 && b.def.cls !== 'mon') this.contagion(b);
+    }
+
+    melee() {
+      const R = this.regs;
+      for (const a of R) {
+        if (!a.cs || a.st !== 0) continue;
+        // weight contacts: what is in front gets the most of our men
+        let sw = 0; const ws = [];
+        for (const b of a.cs) { const z = zoneOf(a, b.x, b.y); const w = z === 0 ? 1 : z === 1 ? 0.35 : 0.15; ws.push(w); sw += w; }
+        const cap = Math.min(a.n, a.files * (a.def.cls === 'cav' ? 1.5 : a.def.cls === 'ele' ? 1 : 2));
+        for (let k = 0; k < a.cs.length; k++) {
+          const b = a.cs[k], share = ws[k] / Math.max(1, sw);
+          let zone = b.st === 1 ? 2 : zoneOf(b, a.x, a.y);
+          let shockK = 1;
+          if (a.form === 'horns' && zone === 0 && a.files > b.files * 1.2) { zone = 1; shockK = 0.7; }
+          if (b.def.cls === 'mon') { this.hurt(b, cap * share * a.def.atk * this.fatMul(a) / 12 * DT, a, 0, 0); continue; }
+          const dmg = cap * share * this.atkMul(a, b) * ZMUL[zone] / (this.defMul(b, zone) * 12) * DT;
+          this.hurt(b, dmg, a, zone, 1.25 * shockK);
+          if (zone > 0 && b.st === 0) b.coh = Math.max(0, b.coh - (zone === 1 ? 0.2 : 0.45) * DT);
         }
-        let h = this.hd[i]; while (h > Math.PI) h -= 6.283; while (h < -Math.PI) h += 6.283; this.hd[i] = h;
-        this.x[i] += cosd(h) * d.spd * DT; this.y[i] += sind(h) * d.spd * DT;
-        if (this.x[i] < 5 || this.x[i] > W - 5 || this.y[i] < 5 || this.y[i] > H - 5) { this.revealT[i] = 0; this.hd[i] += 2.5 * DT * (this.x[i] < W / 2 ? 1 : -1); this.x[i] = clamp(this.x[i], 5, W - 5); this.y[i] = clamp(this.y[i], 5, H - 5); }
-        // guns: shoot whatever is in the nose cone
-        if (this.cd1[i] <= 0 && this.am1[i] > 0) {
-          const fx = this.x[i] + cosd(h) * d.w1.r * 0.55, fy = this.y[i] + sind(h) * d.w1.r * 0.55;
-          let best = -1, bd = 1e9;
-          this.query(fx, fy, d.w1.r * 0.5, (k, d2) => { if (this.hos[this.side[i] * NF + this.side[k]] && d2 < bd && this.visibleTo(k, i, d2)) { bd = d2; best = k; } return false; });
-          if (best >= 0) this.airShoot(i, d, s, best, hyp(this.x[best] - this.x[i], this.y[best] - this.y[i]), rangeMul);
-        }
-      } else {
-        const R = (d.w1 ? d.w1.r : 150) * rangeMul;
-        let mv = 0;
-        if (dd > R * 0.8) mv = 1; else if (dd < R * 0.5) mv = -0.7;
-        if (mv) { this.x[i] = clamp(this.x[i] + dx / dd * d.spd * mv * DT, 5, W - 5); this.y[i] = clamp(this.y[i] + dy / dd * d.spd * mv * DT, 5, H - 5); }
-        this.hd[i] = atan2d(dy, dx);
-        if (j >= 0) this.airShoot(i, d, s, j, dd, rangeMul);
+        a.coh = Math.max(0, a.coh - 0.02 * DT);
+        a.fat = Math.min(100, a.fat + 0.8 * a.def.heavy * DT);
       }
     }
-    airShoot(i, d, s, j, dj, rangeMul) {
-      for (let k = 1; k <= 2; k++) {
-        const w = k === 1 ? d.w1 : d.w2; if (!w) continue;
-        if ((k === 1 ? this.am1[i] : this.am2[i]) <= 0) continue;
-        if (w.en && this.fac[this.side[i]].dark) continue;
-        if (dj > w.r * rangeMul) continue;
-        if (this.airborne(j) && !w.air) continue;
-        if ((k === 1 ? this.cd1[i] : this.cd2[i]) > 0) continue;
-        if (k === 1) this.cd1[i] = w.rof * (0.9 + this.rand() * 0.2); else this.cd2[i] = w.rof * (0.9 + this.rand() * 0.2);
-        if (!(k === 1 && s.freeAmmoT > 0)) { if (k === 1) this.am1[i]--; else this.am2[i]--; }
-        this.fire(i, w, j, k);
-        s.engT = Math.max(s.engT, 0.5);
+
+    // ---------- missiles ----------
+    missiles() {
+      for (const a of this.regs) {
+        const d = a.def;
+        if (a.st !== 0) continue;
+        // pila / throwing spears just before contact
+        if (a.pilum && !a.cs) {
+          const t = this.nearestHostile(a, 34 + a.D / 2, true);
+          if (t && t.def.cls !== 'mon') {
+            a.pilum = 0;
+            const z = zoneOf(t, a.x, a.y);
+            const loss = a.n * 0.09 * d.pilum * lerp(1, formOf(t).rdef, t.coh) * (z ? 1.5 : 1) / (t.def.cls === 'ele' ? 3 : 1);
+            this.hurt(t, loss, a, z, 0.8);
+            if (t.form === 'testudo' || t.form === 'shieldwall') t.coh = Math.max(0, t.coh - 0.15);
+            this.emit({ k: 'volley', x0: a.x, y0: a.y, x1: t.x, y1: t.y, n: 12, kind: 'javelin', side: a.side });
+          }
+        }
+        if (!d.rng || a.ammo <= 0 || a.cs) continue;
+        a.rcd -= DT * (a.buf.tengri > 0 ? 2 : 1);
+        if (a.rcd > 0) continue;
+        if (this.S && d.cls === 'sie' && a.order && a.order.k === 'wl' && this.shootWall(a)) continue;
+        if (d.cls === 'sie' && a.moving) { a.rcd = 0.5; continue; }
+        if (!d.shoot360 && !d.skirm && a.moving && d.cls === 'msl' && a.mom > 0.5) { a.rcd = 0.3; continue; }
+        const rng = d.rng * (1 + 0.3 * this.elevAt(a.x, a.y)) * (this.weather === 'fog' ? 0.75 : 1) * (this.S && this.onWall(a) ? 1.25 : 1);
+        let t = null;
+        if (a.order && a.order.k === 'at') { const o = this.regs[a.order.t]; if (o && this.alive(o) && this.canShoot(a, o, rng)) t = o; }
+        if (!t) t = this.pickShot(a, rng);
+        if (!t) { a.rcd = 0.5; continue; }
+        a.rcd = d.rof; a.ammo--;
+        if (!d.shoot360 && !a.moving && !a.order) a.f = wrap(atan2(t.y - a.y, t.x - a.x));
+        this.shoot(a, t);
       }
+    }
+    canShoot(a, t, rng) {
+      if (t.st === 2 || !this.hostile(a.side, t.side) || !this.visibleTo(t, a.side)) return false;
+      const dd = hyp(t.x - a.x, t.y - a.y);
+      if (dd > rng || (a.def.minr && dd < a.def.minr)) return false;
+      if (t.cs) for (const o of t.cs) if (this.friendly(o.side, a.side)) return false; // no shooting into our own men
+      return true;
+    }
+    pickShot(a, rng) {
+      let best = null, bs = 1e9;
+      for (const t of this.regs) {
+        if (!this.canShoot(a, t, rng)) continue;
+        const dd = hyp(t.x - a.x, t.y - a.y);
+        let s = dd;
+        if (!a.def.shoot360 && a.def.cls !== 'sie') { const ang = Math.abs(wrap(atan2(t.y - a.y, t.x - a.x) - a.f)); if (ang > 1.4 && a.moving) continue; s += ang * 40; }
+        if (a.def.splash && (t.form === 'phalanx' || t.form === 'testudo' || t.form === 'square')) s -= 60;
+        if (t.def.cls === 'ele' && a.def.vsEle) s -= 80;
+        if (t.st === 1) s += 150;
+        if (s < bs) { bs = s; best = t; }
+      }
+      return best;
+    }
+    shoot(a, t) {
+      const d = a.def, z = zoneOf(t, a.x, a.y);
+      if (t.def.cls === 'mon') { this.hurt(t, a.n * d.rdm * 0.6, a, 0, 0); this.emit({ k: 'volley', x0: a.x, y0: a.y, x1: t.x, y1: t.y, n: 10, kind: d.kind, side: a.side }); return; }
+      let m = d.rdm * a.n * this.fatMul(a);
+      m *= lerp(1, formOf(t).rdef, t.coh);
+      if (z) m *= 1.5;
+      if (this.forestAt(t.x, t.y)) m *= d.cls === 'sie' ? 0.3 : 0.5;
+      else if (this.villageAt(t.x, t.y)) m *= 0.6;
+      if (this.weather === 'rain') m *= d.kind === 'arrow' ? 0.6 : 0.85;
+      m *= 1 + 0.15 * this.elevAt(a.x, a.y);
+      if (t.moving && t.def.cls === 'cav') m *= 0.7;
+      if ((t.type === 'pike' || t.type === 'hoplite' || t.type === 'axe' || t.type === 'legion' || t.type === 'spear') && t.form !== 'testudo') m *= 1.3; // archers beat slow heavy infantry
+      if (t.def.cls === 'ele') m *= (d.vsEle || 1);
+      if (d.splash) m *= t.form === 'phalanx' || t.form === 'testudo' || t.form === 'square' ? 1.6 : t.form === 'loose' ? 0.35 : 1;
+      for (const fg of this.fogs) if (fg.side !== a.side && hyp(t.x - fg.x, t.y - fg.y) < fg.r) m *= 0.3;
+      for (const w of this.winds) if (w.side === t.side || this.allied(w.side, t.side)) m *= 0.25;
+      if (this.S) m *= this.coverMul(a, t);
+      const loss = m / t.def.def;
+      const mk = t.def.cls === 'ele' ? (d.vsEle || 1) * 1.5 : 0.75;
+      this.hurt(t, loss, a, z, mk);
+      if (t.def.cls === 'ele' && d.vsEle && t.st === 0) t.morale -= 2 * d.vsEle;
+      if (d.splash) {
+        for (const o of this.regs) if (o !== t && o.st !== 2 && o.def.cls !== 'mon' && hyp(o.x - t.x, o.y - t.y) < 26) this.hurt(o, loss * 0.4, this.hostile(a.side, o.side) ? a : null, 0, 0.6);
+        t.coh = Math.max(0, t.coh - 0.08);
+      }
+      this.emit({ k: 'volley', x0: a.x, y0: a.y, x1: t.x, y1: t.y, n: d.cls === 'sie' ? 1 : Math.min(18, Math.ceil(a.n / 4)), kind: d.kind, side: a.side, hit: t.id });
+    }
+    nearestHostile(a, maxD, front) {
+      let best = null, bd = maxD;
+      for (const t of this.regs) {
+        if (t.st === 2 || !this.hostile(a.side, t.side)) continue;
+        const dd = hyp(t.x - a.x, t.y - a.y) - t.D / 2;
+        if (dd > bd) continue;
+        if (front && Math.abs(wrap(atan2(t.y - a.y, t.x - a.x) - a.f)) > 0.9) continue;
+        bd = dd; best = t;
+      }
+      return best;
+    }
+
+    // ---------- movement ----------
+    goal(r) {
+      const o = r.order;
+      if (r.st === 1) return null;
+      if (o && o.k === 'mv') return { x: o.x, y: o.y, f: o.f };
+      if (o && o.k === 'wl') return this.S ? this.wallGoal(r, o) : null;
+      if (o && o.k === 'at') {
+        const t = this.regs[o.t];
+        if (!t || t.st === 2 || !this.hostile(r.side, t.side)) { r.order = null; return null; }
+        if (r.def.rng && r.ammo > 0 && !r.def.pilum) { // archers close to range, not into melee
+          const dd = hyp(t.x - r.x, t.y - r.y);
+          if (dd < r.def.rng * 0.85) return { x: r.x, y: r.y, f: atan2(t.y - r.y, t.x - r.x) };
+        }
+        return { x: t.x, y: t.y, f: null, chase: t };
+      }
+      return null;
+    }
+    viaFord(r, gx, gy) {
+      const R = this.T.river; if (!R) return null;
+      const s0 = r.y - this.riverY(r.x), s1 = gy - this.riverY(gx);
+      if ((s0 < 0) === (s1 < 0) || Math.abs(s0) > 400) return null;
+      let bf = R.fords[0], bd = 1e9;
+      for (const f of R.fords) { const dd = Math.abs(f - r.x) + Math.abs(f - gx); if (dd < bd) { bd = dd; bf = f; } }
+      const sg = s0 < 0 ? -1 : 1, ry = this.riverY(bf);
+      if (Math.abs(r.x - bf) > R.fw * 0.5 || Math.abs(s0) > 40) return { x: bf, y: ry + sg * 30 };
+      return { x: bf, y: ry - sg * 34 };
+    }
+    move() {
+      for (const r of this.regs) {
+        if (r.st === 2 || r.def.cls === 'mon') continue;
+        const d = r.def; let tx, ty, tf = null, speed = d.spd * formOf(r).spd;
+        r.moving = 0;
+        if (r.st === 1) {
+          // rout: away from the enemy, toward home; panicking elephants stampede through their own lines
+          const h = this.homes[r.side];
+          let ax = 0, ay = 0;
+          const e = this.nearestHostile(r, 200, false);
+          if (e) { const dd = hyp(r.x - e.x, r.y - e.y) || 1; ax = (r.x - e.x) / dd; ay = (r.y - e.y) / dd; }
+          const hd = hyp(h.x - r.x, h.y - r.y) || 1;
+          let dx = ax + (h.x - r.x) / hd * (r.panic ? 1.6 : 0.9), dy = ay + (h.y - r.y) / hd * (r.panic ? 1.6 : 0.9);
+          if (r.panic) { dx += (r.panic - 0.5); }
+          const z = this.zones[r.side];
+          dx -= cos(z.f) * 0.6; dy -= sin(z.f) * 0.6;
+          const L = hyp(dx, dy) || 1;
+          tx = r.x + dx / L * 50; ty = r.y + dy / L * 50; speed = d.spd * (r.panic ? 1.3 : 1.15);
+        } else {
+          let g = this.goal(r);
+          if (!g && r.hold && hyp(r.hold.x - r.x, r.hold.y - r.y) > 3) g = r.hold;
+          // skirmishers keep their distance from melee troops
+          if (d.skirm && !r.cs && (!r.order || r.order.k !== 'mv')) {
+            const e = this.nearestHostile(r, d.rng ? Math.min(55, d.rng * 0.7) : 60, false);
+            if (e && e.st === 0 && e.def.cls !== 'msl' && e.def.cls !== 'sie' && !(e.def.cls === 'inf' && d.cls === 'cav' && !e.moving)) {
+              const dd = hyp(r.x - e.x, r.y - e.y) || 1;
+              g = { x: r.x + (r.x - e.x) / dd * 70, y: r.y + (r.y - e.y) / dd * 70, f: d.shoot360 ? null : atan2(e.y - r.y, e.x - r.x), evade: 1 };
+              if (!r.evading) { r.evading = 1; if (d.shoot360) this.callout('FEIGNED RETREAT', r.x, r.y - 10, '#ffe9b0'); }
+            } else r.evading = 0;
+          }
+          if (r.cs) { // locked in melee: turn to the main threat if only one enemy, otherwise pinned
+            if (r.cs.length === 1 && !(r.order && r.order.k === 'mv')) {
+              const e = r.cs[0], want = atan2(e.y - r.y, e.x - r.x), df = wrap(want - r.f);
+              const rate = 0.6 * formOf(r).turn * r.coh * DT;
+              r.f = wrap(r.f + clamp(df, -rate, rate));
+            }
+            if (!(r.order && r.order.k === 'mv')) { r.mom = 0; this.terrainEffects(r, 0); continue; }
+          }
+          if (!g) {
+            r.mom = Math.max(0, r.mom - 2 * DT);
+            // idle: face the nearest threat
+            const e = this.nearestHostile(r, 160, false);
+            if (e && !r.cs && r.def.cls !== 'sie') { const df = wrap(atan2(e.y - r.y, e.x - r.x) - r.f); if (Math.abs(df) > 0.5) { const rate = 0.5 * formOf(r).turn * DT; r.f = wrap(r.f + clamp(df, -rate, rate)); } }
+            this.terrainEffects(r, 0); continue;
+          }
+          tx = g.x; ty = g.y; tf = g.f;
+          const via = this.viaFord(r, tx, ty); if (via) { tx = via.x; ty = via.y; tf = null; }
+          if (this.S) { const v = this.viaGap(r, tx, ty); if (v) { tx = v.x; ty = v.y; tf = null; if (v.slow) speed *= v.slow; } }
+          if (g.chase) { // approach the target's nearest face, aim for contact
+            const t = g.chase; const dd = hyp(t.x - r.x, t.y - r.y);
+            if (dd < 110 && d.chg >= 1) speed *= 1.2; // charge!
+          }
+        }
+        const dx = tx - r.x, dy = ty - r.y, dist = hyp(dx, dy);
+        const want = atan2(dy, dx);
+        const turnRate = (d.cls === 'cav' ? 1.8 : d.cls === 'ele' ? 0.9 : d.cls === 'sie' ? 0.5 : 1.1) * formOf(r).turn;
+        if (dist < 2) {
+          if (r.st === 0 && r.order && r.order.k === 'mv') { r.hold = { x: r.order.x, y: r.order.y }; if (tf == null) r.order = null; }
+          if (tf != null) {
+            const df = wrap(tf - r.f), rate = turnRate * 0.8 * DT;
+            r.f = wrap(r.f + clamp(df, -rate, rate));
+            if (Math.abs(df) > 0.3 && (r.form === 'phalanx' || r.form === 'testudo' || r.form === 'shieldwall')) r.coh = Math.max(0.3, r.coh - 0.04 * DT);
+            if (Math.abs(df) < 0.02 && r.order && r.order.k === 'mv') r.order = null;
+          }
+          r.mom = Math.max(0, r.mom - 2 * DT);
+          this.terrainEffects(r, 0);
+          continue;
+        }
+        // wheel toward the direction of travel; big turns slow the regiment down
+        let df = wrap(want - r.f);
+        const back = Math.abs(df) > 2.4 && dist < 60 && r.st === 0 && d.cls !== 'cav'; // short step back keeps facing
+        if (back) df = wrap(want + PI - r.f);
+        const rate = turnRate * DT;
+        r.f = wrap(r.f + clamp(df, -rate, rate));
+        if (Math.abs(df) > rate && (r.form === 'phalanx' || r.form === 'testudo' || r.form === 'square' || r.form === 'shieldwall')) r.coh = Math.max(0.25, r.coh - 0.05 * DT);
+        let sp = speed * (Math.abs(df) > 0.7 ? 0.3 : 1) * (back ? 0.4 : 1) * this.fatMul(r);
+        if (r.buf.shaka > 0) sp *= 1.4; if (r.buf.tengri > 0) sp *= 1.3;
+        sp *= this.terrainEffects(r, 1);
+        // hills: uphill slows, downhill speeds up
+        const ux = dx / dist, uy = dy / dist;
+        const dh = this.elevAt(r.x + ux * 12, r.y + uy * 12) - this.elevAt(r.x, r.y);
+        sp *= clamp(1 - dh * 2.5, 0.6, 1.2);
+        const stepL = Math.min(dist, sp * DT);
+        let nx = r.x + ux * stepL, ny = r.y + uy * stepL;
+        if (this.T.river && this.waterAt(nx, ny) === 1) { // rivers only cross at fords
+          if (this.waterAt(nx, r.y) !== 1) ny = r.y; else if (this.waterAt(r.x, ny) !== 1) nx = r.x; else { nx = r.x; ny = r.y; }
+        }
+        if (this.S && r.st === 0 && this.wallBlock(r, nx, ny)) { nx = r.x; ny = r.y; }
+        if (r.st === 0) { nx = clamp(nx, 5, W - 5); ny = clamp(ny, 5, H - 5); }
+        r.vx = (nx - r.x) / DT; r.vy = (ny - r.y) / DT; r.x = nx; r.y = ny;
+        r.moving = stepL > 0.2 * DT ? 1 : 0;
+        const fast = sp > d.spd * 0.8;
+        if (fast && Math.abs(df) < 0.25) r.mom = Math.min(1, r.mom + DT / (d.cls === 'inf' ? 2.2 : 1.3));
+        else r.mom = Math.max(0, r.mom - 1.5 * DT);
+        r.fat = Math.min(100, r.fat + (fast ? (d.cls === 'cav' ? 1.6 : 1.4) : 0.35) * d.heavy * DT * (this.weather === 'rain' ? 1.25 : 1) * (r.buf.shaka > 0 ? 0 : 1));
+        if (r.st === 1 && (r.x < -20 || r.x > W + 20 || r.y < -20 || r.y > H + 20)) { r.st = 2; this.emit({ k: 'fled', id: r.id, side: r.side }); }
+      }
+      this.separate();
+    }
+    terrainEffects(r, moving) {
+      const d = r.def, fo = this.forestAt(r.x, r.y), wa = this.waterAt(r.x, r.y);
+      let sp = 1;
+      r.hidden = fo || this.fogs.some(f => f.side === r.side && hyp(r.x - f.x, r.y - f.y) < f.r) ? 1 : 0;
+      if (fo) {
+        if (d.cls === 'cav' || d.cls === 'ele') { sp *= d.chariot ? 0.3 : 0.45; r.coh = Math.max(0, r.coh - (d.chariot ? 0.35 : 0.12) * DT); r.mom = Math.min(r.mom, 0.2); if (d.chariot && moving) this.hurt(r, 0.5 * DT, null, 0, 0.5); }
+        else { sp *= 0.75; if (r.form === 'phalanx' || r.form === 'testudo' || r.form === 'square' || r.form === 'shieldwall') r.coh = Math.max(0.2, r.coh - 0.08 * DT); }
+      }
+      if (!fo && this.villageAt(r.x, r.y)) { sp *= d.cls === 'cav' || d.cls === 'ele' ? 0.55 : 0.85; if (d.cls === 'cav' || r.form === 'phalanx') r.coh = Math.max(0.3, r.coh - 0.06 * DT); }
+      if (wa === 2) { sp *= 0.45; r.coh = Math.max(0.2, r.coh - 0.05 * DT); r.mom = Math.min(r.mom, 0.2); if (d.chariot) r.coh = Math.max(0, r.coh - 0.25 * DT); }
+      if (d.chariot && moving && this.elevAt(r.x, r.y) > 0.5) { r.coh = Math.max(0, r.coh - 0.2 * DT); sp *= 0.7; }
+      if (d.chariot && r.coh < 0.25 && !r._broke && (fo || wa || this.elevAt(r.x, r.y) > 0.5)) { r._broke = 1; this.callout('CHARIOTS BREAK ON ROUGH GROUND', r.x, r.y - 10, '#ffb04a'); }
+      return sp;
     }
     separate() {
-      const n = this.n, cs = this.cellStart, ord = this.order, par = this.tick & 1;
-      for (let i = 0; i < n; i++) {
-        if (!this.alive[i] || (i & 1) !== par) continue;
-        const di = HB.UNITS[this.ti[i]];
-        if ((di.air && this.airborne(i)) || di.hover) continue;
-        const xi = this.x[i], yi = this.y[i], ri = di.rad;
-        const cx = (xi / CS) | 0, cy = (yi / CS) | 0;
-        const span = ri > 4 ? 1 : (xi - cx * CS < CS / 2 ? -1 : 0);
-        for (let r = cy - 1; r <= cy + 1; r++) {
-          if (r < 0 || r >= GH) continue;
-          for (let c = cx - 1; c <= cx + 1; c++) {
-            if (c < 0 || c >= GW) continue;
-            void span;
-            const cell = r * GW + c;
-            for (let k = cs[cell], e = cs[cell + 1]; k < e; k++) {
-              const j = ord[k]; if (j === i || !this.alive[j]) continue;
-              const dj = HB.UNITS[this.ti[j]];
-              if ((dj.air && this.airborne(j)) || dj.hover) continue;
-              let dx = this.x[j] - this.x[i], dy = this.y[j] - this.y[i];
-              const min = ri + dj.rad, d2 = dx * dx + dy * dy;
-              if (d2 >= min * min) continue;
-              let dd = Math.sqrt(d2);
-              if (dd < 0.01) { dx = this.rand() - 0.5; dy = this.rand() - 0.5; dd = Math.sqrt(dx * dx + dy * dy); }
-              const ov = (min - dd) * 0.5;
-              const wi = di.veh ? (dj.veh ? 0.5 : 0.03) : (dj.veh ? 0.97 : 0.5);
-              const fixed_i = di.spd === 0 || (di.air && !dj.air) || (di.fuel && this.fuel[i] <= 0);
-              const fixed_j = dj.spd === 0 || (dj.fuel && this.fuel[j] <= 0);
-              const mi = fixed_i ? 0 : (fixed_j ? 1 : wi), mj = fixed_j ? 0 : (fixed_i ? 1 : 1 - wi);
-              this.x[i] = clamp(this.x[i] - dx / dd * ov * 2 * mi, 2, W - 2); this.y[i] = clamp(this.y[i] - dy / dd * ov * 2 * mi, 2, H - 2);
-              this.x[j] = clamp(this.x[j] + dx / dd * ov * 2 * mj, 2, W - 2); this.y[j] = clamp(this.y[j] + dy / dd * ov * 2 * mj, 2, H - 2);
-            }
+      const R = this.regs;
+      for (let i = 0; i < R.length; i++) {
+        const a = R[i]; if (a.st === 2 || a.def.cls === 'mon') continue;
+        for (let j = i + 1; j < R.length; j++) {
+          const b = R[j]; if (b.st === 2 || b.def.cls === 'mon') continue;
+          const dx = b.x - a.x, dy = b.y - a.y, d = hyp(dx, dy); if (d > 130) continue;
+          const ux = d > 0 ? dx / d : 1, uy = d > 0 ? dy / d : 0;
+          const ov = ext(a, ux, uy) + ext(b, -ux, -uy) - d;
+          if (ov <= 0) continue;
+          const hostile = this.hostile(a.side, b.side);
+          if (!hostile && (a.st === 1 || b.st === 1)) { // routers and panicking elephants run through friends
+            const p = a.st === 1 ? a : b, o = p === a ? b : a;
+            if (p.panic && o.st === 0) { this.hurt(o, p.n * 0.3 * DT, null, 1, 1.2); o.coh = Math.max(0, o.coh - 0.3 * DT); }
+            else if (o.st === 0) o.coh = Math.max(0.2, o.coh - 0.1 * DT);
+            continue;
+          }
+          if (hostile && (a.panic || b.panic)) { const p = a.panic ? a : b, o = p === a ? b : a; this.hurt(o, p.n * 0.3 * DT, p, 1, 1.2); }
+          // movers yield to stationary regiments; hostile pushes stop at contact
+          const am = a.moving ? 1 : 0.25, bm = b.moving ? 1 : 0.25, s = am + bm;
+          const push = Math.min(ov, hostile ? ov : 3);
+          a.x -= ux * push * am / s; a.y -= uy * push * am / s;
+          b.x += ux * push * bm / s; b.y += uy * push * bm / s;
+        }
+      }
+    }
+
+    // ---------- morale, rout, rally ----------
+    updateState() {
+      const regeo = this.tick % 10 === 0;
+      for (const r of this.regs) {
+        if (r.st === 2) continue;
+        if (regeo && r.def.cls !== 'mon') geom(r);
+        for (const k of BUFFS) if (r.buf[k] > 0) r.buf[k] -= DT;
+        if (r.cd > 0) r.cd -= DT;
+        if (r.def.cls === 'mon') continue;
+        if (r.st === 0) {
+          if (!r.cs) {
+            r.coh = Math.min(1, r.coh + (r.moving ? 0.03 : 0.1) * DT);
+            if (!r.moving) r.fat = Math.max(0, r.fat - 2.5 * DT);
+            if (this.t - r.lastHit > 4) r.morale = Math.min(r.def.mor + 10, r.morale + 0.8 * DT);
+          }
+          r.waver = r.morale < 30 ? 1 : 0;
+          const immune = r.buf.stand > 0 || r.buf.berserk > 0;
+          const ele = r.def.cls === 'ele';
+          const brk = ele ? (r.morale < 32 && !(r.buf.nopanic > 0)) : !immune && (r.morale <= 0 || (r.morale < 18 && (r.coh < 0.35 || this.flanked(r))));
+          if (brk) this.rout(r);
+        } else if (r.st === 1) {
+          r.routT += DT;
+          const e = this.nearestHostile(r, 110, false);
+          if (!e && !r.panic) r.morale += 5 * DT;
+          if (!r.panic && r.morale >= 40 && r.routT > 4 && r.rallies < (r.def.mor >= 75 ? 2 : 1) && r.n >= r.n0 * 0.22) {
+            r.st = 0; r.rallies++; r.coh = 0.35; r.mom = 0; r.order = null; r.routT = 0; r.hold = { x: r.x, y: r.y }; r.form = r.def.forms[0]; geom(r);
+            this.stats.rallies++;
+            this.callout('RALLIED!', r.x, r.y - 10, '#bff59a');
           }
         }
       }
     }
-    checkEnd2() {
-      const c0 = this.sideCount(0), c1 = this.sideCount(1);
-      let w = -2;
-      if (c0 === 0 && c1 === 0) w = -1;
-      else if (c0 === 0) w = 1;
-      else if (c1 === 0) w = 0;
-      else if (this.t > (this.opts.timeLimit || 300)) {
-        const v0 = this.sideValue(0) / Math.max(1, this.startValue[0]), v1 = this.sideValue(1) / Math.max(1, this.startValue[1]);
-        w = Math.abs(v0 - v1) < 0.02 ? -1 : (v0 > v1 ? 0 : 1);
-        this.timeout = true;
+    flanked(r) { if (!r.cs) return false; for (const e of r.cs) if (zoneOf(r, e.x, e.y) > 0) return true; return false; }
+    rout(r) {
+      r.st = 1; r.order = null; r.mom = 0; r.routT = 0; r.hold = 0; r.morale = Math.min(r.morale, 5);
+      this.stats.routs++;
+      if (r.def.cls === 'ele') { r.panic = 0.2 + this.rand() * 0.6; this.callout('ELEPHANTS PANIC!', r.x, r.y - 12, '#ff9a6a', true); }
+      else this.callout(r.name.toUpperCase() + ' ROUT!', r.x, r.y - 12, '#ffd0a0');
+      this.emit({ k: 'rout', id: r.id, side: r.side, x: r.x, y: r.y });
+      for (let s = 0; s < this.nF; s++) if (this.hostile(s, r.side)) this.fac[s].faith = Math.min(100, this.fac[s].faith + 6);
+      this.contagion(r);
+    }
+    contagion(r) { // a breaking regiment shakes its neighbours
+      for (const o of this.regs) {
+        if (o === r || o.st !== 0 || !this.friendly(o.side, r.side) || o.def.cls === 'mon') continue;
+        const dd = hyp(o.x - r.x, o.y - r.y);
+        if (dd > 100) continue;
+        if (o.buf.stand > 0 || o.buf.berserk > 0) continue;
+        const hit = (dd < 50 ? 14 : 9) * (o.side === r.side ? 1 : 0.6) / this.depthK(o);
+        o.morale -= hit;
+        if (o.morale < 30 && !o.waver) { o.waver = 1; this.callout('WAVERING', o.x, o.y - 10, '#ffc890'); }
       }
-      if (w !== -2) { this.over = true; this.winner = w; this.emit({ k: 'end', winner: w, big: true }); }
     }
-    // ---------- results ----------
-    summary2() {
-      const sq = this.squads.filter(s => !s.def.hidden || s.label);
-      const mvp = sq.filter(s => !s.def.tagset.decoy).sort((a, b) => (b.kv - a.kv) || (b.dmg - a.dmg))[0];
-      return {
-        winner: this.winner, time: this.t, timeout: !!this.timeout,
-        survivors: [0, 1].map(side => this.squads.filter(s => s.side === side && !s.temp).map(s => ({ name: s.label || s.def.name, alive: s.alive, n0: s.n0, kills: s.kills, kv: s.kv }))),
-        mvp: mvp ? { name: mvp.label || mvp.def.name, side: mvp.side, kills: mvp.kills, kv: mvp.kv } : null,
-        events: this.stats.events.slice(), abilities: this.stats.abilities,
-      };
+
+    // ---------- faith, abilities, curse ----------
+    updateMeters() {
+      for (let s = 0; s < this.nF; s++) {
+        const f = this.fac[s];
+        if (!this.unbroken(s)) continue;
+        let hill = 0; for (const r of this.regs) if (r.side === s && r.st === 0 && this.elevAt(r.x, r.y) > 0.45) hill++;
+        f.faith = Math.min(100, f.faith + 0.6 + 0.25 * Math.min(4, hill));
+        if (f.curseCd > 0) f.curseCd -= 1;
+        if (f.vengeT > 0) f.vengeT -= 1;
+        if (f.pending) { f.pending.T -= 1; if (f.pending.T <= 0) f.pending = null; }
+      }
+      for (const fg of this.fogs) fg.T -= 1; this.fogs = this.fogs.filter(f => f.T > 0);
+      for (const w of this.winds) w.T -= 1; this.winds = this.winds.filter(w => w.T > 0);
+      // Gods' Wrath: too much blood (and betrayal) angers the gods
+      this.bloodshed = Math.min(100, this.deaths / (this.men0 * 0.42) * 100 + this.diplo.filter(d => d.type === 'betray').length * 22 + this.curses * 3);
+      if (!this.wrath && !this.wrathDone && this.bloodshed >= 100 && this.t > 30) this.startWrath();
+      if (this.wrath) { this.wrath.T -= 1; if (this.wrath.T <= 0 || (this.wrath.mon && this.wrath.mon.hp <= 0)) this.endWrath(); }
     }
-  }
-  function bonusMul(d, t) {
-    if (!d.bonus) return 1;
-    let m = 1;
-    for (const k in d.bonus) if (t.tagset[k]) m *= d.bonus[k];
-    return m;
-  }
-  function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
-  function cellOf(x, y) {
-    let c = (x / CS) | 0, r = (y / CS) | 0;
-    if (c < 0) c = 0; else if (c >= GW) c = GW - 1;
-    if (r < 0) r = 0; else if (r >= GH) r = GH - 1;
-    return r * GW + c;
+    faithCost(r) { const L = HB.LORE[r.lore]; return L ? L.cost * (this.fac[r.side].oath ? 2 : 1) : 0; }
+    canActivate(r) {
+      if (!r.lore || r.st !== 0) return 'No ability';
+      if (r.cd > 0) return 'Recharging ' + Math.ceil(r.cd) + 's';
+      const c = this.faithCost(r); if (this.fac[r.side].faith < c) return 'Needs ' + c + ' faith';
+      return '';
+    }
+    activate(r, manual) {
+      const why = this.canActivate(r);
+      if (why) { if (manual) this.emit({ k: 'deny', side: r.side, msg: why }); return false; }
+      const f = this.fac[r.side], L = HB.LORE[r.lore];
+      f.faith -= this.faithCost(r); r.cd = L.cd;
+      if (f.oath && this.rand() < 0.3) { this.callout('THE GODS TURN AWAY', r.x, r.y - 14, '#c8a0ff', true); this.emit({ k: 'ability', id: r.id, side: r.side, name: 'FIZZLED', x: r.x, y: r.y }); return true; }
+      const own = (fn) => { for (const o of this.regs) if (o.side === r.side && o.st === 0) fn(o); };
+      const near = (rad, fn) => { for (const o of this.regs) if (o.st === 0 && this.hostile(r.side, o.side) && o.def.cls !== 'mon' && hyp(o.x - r.x, o.y - r.y) < rad) fn(o); };
+      switch (r.lore) {
+        case 'mars': r.buf.mars = 9; r.coh = 1; r.morale += 25; break;
+        case 'thermopylae': r.buf.stand = 14; r.morale = Math.max(r.morale, 60); break;
+        case 'alexander': r.buf.charge2 = 20; own(o => { if (hyp(o.x - r.x, o.y - r.y) < 110) o.morale += 15; }); break;
+        case 'hannibal': own(o => { if (o.def.cls === 'ele') { o.buf.nopanic = 15; o.morale = Math.max(o.morale, 55); for (const e of this.regs) if (e.st === 0 && this.hostile(r.side, e.side) && e.def.cls !== 'mon' && hyp(e.x - o.x, e.y - o.y) < 90) e.morale -= 15; } }); break;
+        case 'druidfog': this.fogs.push({ x: r.x, y: r.y, r: 120, side: r.side, T: 16 }); break;
+        case 'berserk': r.buf.berserk = 10; break;
+        case 'tengri': own(o => { if (o.type === 'horsearcher') o.buf.tengri = 10; }); break;
+        case 'kamikaze': {
+          this.winds.push({ side: r.side, T: 10, x: r.x, y: r.y });
+          near(260, o => { o.coh = Math.max(0, o.coh - 0.6); o.morale -= 8; o.mom = 0; });
+          break;
+        }
+        case 'fifthsun': own(o => { o.morale += 25; if (o.type === 'elite') o.buf.sun = 10; }); break;
+        case 'shaka': own(o => { if (o.type === 'impi') { o.buf.shaka = 8; o.fat = 0; for (const e of this.regs) if (e.st === 0 && this.hostile(r.side, e.side) && e.def.cls !== 'mon' && hyp(e.x - o.x, e.y - o.y) < 100) e.morale -= 10 / 3; } }); break;
+      }
+      this.stats.abilities++;
+      this.emit({ k: 'ability', id: r.id, side: r.side, name: L.name, lore: r.lore, x: r.x, y: r.y });
+      this.callout(L.name + '!', r.x, r.y - 16, '#ffd84a', true);
+      return true;
+    }
+    canCurse(side, t) {
+      const f = this.fac[side];
+      if (!t || t.st !== 0 || t.def.cls === 'mon') return 'Pick an enemy regiment';
+      if (!this.hostile(side, t.side)) return 'Not an enemy';
+      if (f.curseCd > 0) return 'Curse recharging ' + Math.ceil(f.curseCd) + 's';
+      const c = HB.CURSE.cost * (f.oath ? 2 : 1); if (f.faith < c) return 'Curse needs ' + c + ' faith';
+      return '';
+    }
+    curse(side, t, manual) {
+      const why = this.canCurse(side, t);
+      if (why) { if (manual) this.emit({ k: 'deny', side, msg: why }); return false; }
+      const f = this.fac[side];
+      f.faith -= HB.CURSE.cost * (f.oath ? 2 : 1); f.curseCd = HB.CURSE.cd; this.curses++;
+      const k = t.morale > 80 ? 0.5 : 1;
+      t.coh = Math.min(t.coh, 1 - 0.85 * k); t.buf.curse = 10 * k; t.morale -= 15 * k; t.mom = 0;
+      this.emit({ k: 'curse', id: t.id, side, x: t.x, y: t.y });
+      this.callout('CURSED!', t.x, t.y - 14, '#c58cff', true);
+      return true;
+    }
+
+    // ---------- diplomacy (3-4 armies) ----------
+    diploEv(type, a, b, text) { this.diplo.push({ t: Math.round(this.t), type, a, b }); this.emit({ k: 'diplo', type, a, b, text }); }
+    propose(a, b) {
+      const fa = this.fac[a], fb = this.fac[b];
+      if (!fa || !fb || a === b || fa.ally >= 0 || fb.ally >= 0 || fa.oath || fb.oath || !this.unbroken(a) || !this.unbroken(b) || this.wrath) return;
+      if (fb.cmd === 'human' && !fb.auto) { fb.pending = { from: a, T: 12 }; this.emit({ k: 'diplo', type: 'offer', a, b, text: fa.name + ' offers ' + fb.name + ' an alliance' }); return; }
+      const C = HB.COMMANDERS[fb.cmd] || HB.COMMANDERS.ai;
+      if (this.rand() < C.accept) this.makeAlliance(a, b);
+      else this.diploEv('decline', a, b, fb.name + ' rejects ' + fa.name + "'s alliance");
+    }
+    accept(a, b) { const f = this.fac[a]; if (f.pending && f.pending.from === b) { f.pending = null; this.makeAlliance(a, b); } }
+    makeAlliance(a, b) {
+      const fa = this.fac[a], fb = this.fac[b];
+      if (fa.ally >= 0 || fb.ally >= 0) return;
+      fa.ally = b; fb.ally = a; fa.allyT0 = fb.allyT0 = this.t;
+      this.hos[a * NS + b] = this.hos[b * NS + a] = 0;
+      for (const r of this.regs) if ((r.side === a || r.side === b) && r.order && r.order.k === 'at') { const t = this.regs[r.order.t]; if (t.side === a || t.side === b) r.order = null; }
+      this.diploEv('ally', a, b, '🤝 ' + fa.name + ' & ' + fb.name + ' form an alliance');
+    }
+    betray(a, b) {
+      const fa = this.fac[a], fb = this.fac[b];
+      const age = Math.round(this.t - fa.allyT0);
+      fa.ally = fb.ally = -1;
+      if (!this.wrath) this.hos[a * NS + b] = this.hos[b * NS + a] = 1;
+      // the loot: a surprise attack and the victim's faith
+      const loot = Math.round(fb.faith * 0.5); fb.faith -= loot; fa.faith = Math.min(100, fa.faith + loot);
+      fa.ambushOn = b;
+      for (const r of this.regs) {
+        if (r.side === a && r.st === 0) { r.buf.ambush = 8; r.morale -= 12; }
+        if (r.side === b && r.st === 0) { r.morale += 5; }
+      }
+      fa.oath = true; fa.betrayals++;
+      fb.vengeT = 45; fb.vengeOn = a;
+      this.diploEv('betray', a, b, '🗡 ' + fa.name + ' BETRAYED ' + fb.name + ' after a ' + age + 's alliance');
+      this.emit({ k: 'betrayed', a, b, age, text: '🗡 ' + fa.name + ' BETRAYED ' + fb.name + ' after a ' + age + 's alliance' });
+    }
+    diplomacy() {
+      if (this.over || this.wrath) return;
+      const live = []; for (let s = 0; s < this.nF; s++) if (this.unbroken(s)) live.push(s);
+      for (const s of live) {
+        const f = this.fac[s]; if (!f.auto) continue;
+        const C = HB.COMMANDERS[f.cmd] || HB.COMMANDERS.ai;
+        if (f.ally >= 0) {
+          const v = f.ally, age = this.t - f.allyT0;
+          const others = live.filter(x => x !== s && x !== v).length;
+          let p = 0;
+          if (age > 20) p = others === 0 ? C.betray * 0.5 : C.betray * 0.02 * (this.sideStrength(v) < this.sideStrength(s) * 0.85 ? 2.5 : 1);
+          if (p > 0 && this.rand() < p) this.betray(s, v);
+        } else if (live.length >= 3 && this.t > 4 && !f.oath && this.rand() < C.propose) {
+          const cands = live.filter(x => x !== s && this.fac[x].ally < 0 && !this.fac[x].oath);
+          if (!cands.length) continue;
+          cands.sort((x, y) => this.sideStrength(y) - this.sideStrength(x) || x - y);
+          const pick = cands.length > 1 && this.rand() < 0.6 ? cands[1] : cands[0];
+          this.propose(s, pick);
+        }
+      }
+    }
+
+    // ---------- Gods' Wrath ----------
+    startWrath() {
+      const kind = this.rand() < 0.5 ? 'titan' : 'dragon';
+      const mon = this.addReg(MON, kind, null, W / 2, kind === 'dragon' ? 60 : H / 2, HPI);
+      mon.name = kind === 'titan' ? 'The Titan' : 'The Dragon'; mon.n = mon.n0 = 1;
+      const saved = Array.from(this.hos);
+      for (let a = 0; a < this.nF; a++) for (let b = 0; b < this.nF; b++) this.hos[a * NS + b] = 0;
+      for (let a = 0; a < this.nF; a++) { this.hos[a * NS + MON] = 1; this.hos[MON * NS + a] = 1; }
+      for (const r of this.regs) if (r.order && r.order.k === 'at' && this.regs[r.order.t].side !== MON) r.order = null;
+      this.wrath = { kind, T: 45, dur: 45, mon, saved, atkT: 3 };
+      for (const f of this.fac) f.msDmg = 0;
+      this.events.push('wrath');
+      this.emit({ k: 'event', id: 'wrath', kind, text: "GODS' WRATH", sub: (kind === 'titan' ? 'A Titan walks' : 'A Dragon descends') + '. Too much blood was spilled: every army is under truce until it is gone.', big: true });
+    }
+    monsterThink() {
+      const w = this.wrath, m = w.mon; if (m.st === 2) return;
+      // walk toward the densest knot of men
+      let best = null, bs = -1;
+      for (const r of this.regs) { if (r.st === 2 || r.side === MON) continue; let s = r.n; for (const o of this.regs) if (o !== r && o.st !== 2 && o.side !== MON && hyp(o.x - r.x, o.y - r.y) < 80) s += o.n; s -= hyp(r.x - m.x, r.y - m.y) * 0.3; if (s > bs) { bs = s; best = r; } }
+      if (best) {
+        const dx = best.x - m.x, dy = best.y - m.y, d = hyp(dx, dy) || 1;
+        m.f = wrap(m.f + clamp(wrap(atan2(dy, dx) - m.f), -1.5 * DT, 1.5 * DT));
+        if (d > 30) { m.x += dx / d * m.def.spd * DT; m.y += dy / d * m.def.spd * DT; m.moving = 1; } else m.moving = 0;
+      }
+      w.atkT -= DT;
+      if (w.atkT <= 0) {
+        w.atkT = w.kind === 'titan' ? 2.4 : 3;
+        const hits = [];
+        for (const r of this.regs) {
+          if (r.st === 2 || r.side === MON) continue;
+          const dx = r.x - m.x, dy = r.y - m.y, d = hyp(dx, dy);
+          const inArea = w.kind === 'titan' ? d < 55 + r.W / 3 : d < 120 && Math.abs(wrap(atan2(dy, dx) - m.f)) < 0.6;
+          if (!inArea) continue;
+          this.hurt(r, (r.def.cls === 'ele' ? 1.2 : w.kind === 'titan' ? 8 : 9) * (r.n0 > 30 ? 1 : 0.4), null, 1, 0.8);
+          if (r.st === 0) { r.morale -= 10; r.coh = Math.max(0, r.coh - 0.45); }
+          hits.push(r.id);
+        }
+        this.emit({ k: w.kind === 'titan' ? 'stomp' : 'breath', x: m.x, y: m.y, f: m.f, hits });
+      }
+    }
+    endWrath() {
+      const w = this.wrath; const m = w.mon; const killed = m.hp <= 0;
+      m.st = 2; this.wrath = null; this.wrathDone = true;
+      for (let i = 0; i < this.hos.length; i++) this.hos[i] = w.saved[i];
+      for (let a = 0; a < this.nF; a++) for (let b = 0; b < this.nF; b++) if (this.allied(a, b)) this.hos[a * NS + b] = 0;
+      let top = -1, td = 0;
+      for (let s = 0; s < this.nF; s++) if (this.fac[s].msDmg > td) { td = this.fac[s].msDmg; top = s; }
+      if (top >= 0) { this.fac[top].faith = 100; for (const r of this.regs) if (r.side === top && r.st === 0) r.morale += 20; }
+      const nm = w.kind === 'titan' ? 'TITAN' : 'DRAGON';
+      this.emit({ k: 'event', id: 'wrathend', text: killed ? 'THE ' + nm + ' FALLS' : 'THE ' + nm + ' DEPARTS', sub: (top >= 0 ? this.fac[top].name + ' fought it hardest: full faith and +20 morale. ' : '') + 'The truce is over.', big: true });
+    }
+
+    // ---------- end ----------
+    checkEnd() {
+      if (this.over) return;
+      if (this.S && this.siegeEnd()) return;
+      const live = []; for (let s = 0; s < this.nF; s++) if (this.unbroken(s)) live.push(s);
+      let done = false, winners = [];
+      if (live.length <= 1) { done = true; winners = live; }
+      else if (live.length === 2 && this.allied(live[0], live[1]) && !this.wrath) {
+        this.allyWinT += 1; if (this.allyWinT >= 20) { done = true; winners = live; this.alliedWin = true; }
+      } else this.allyWinT = 0;
+      if (!done && this.t >= this.tmax) {
+        done = true; this.timeout = true;
+        let bs = -1; for (const s of live) { const v = this.sideStrength(s); if (v > bs) { bs = v; winners = [s]; } }
+      }
+      if (done) { this.over = true; this.winners = winners; this.winner = winners.length ? winners[0] : -1; this.emit({ k: 'over', winners }); }
+    }
+    summary() {
+      const sides = [];
+      for (let s = 0; s < this.nF; s++) {
+        const f = this.fac[s];
+        sides.push({ name: f.name, faction: f.faction, cmd: f.cmd, oath: f.oath, betrayals: f.betrayals, kills: Math.round(f.kills), lost: Math.round(f.lost), faith: Math.round(f.faith), msDmg: Math.round(f.msDmg),
+          regs: this.regs.filter(r => r.side === s).map(r => ({ name: r.name, n: Math.round(r.n), n0: r.n0, st: r.st, kills: Math.round(r.kills) })),
+          total: this.sideCount(s), inOrder: this.sideStrength(s) });
+      }
+      let mvp = null; for (const r of this.regs) if (r.side < this.nF && (!mvp || r.kills > mvp.kills)) mvp = r;
+      return { winner: this.winner, winners: this.winners, alliedWin: this.alliedWin, timeout: this.timeout, time: this.t, sides,
+        mvp: mvp && { name: mvp.name, side: mvp.side, kills: Math.round(mvp.kills) }, stats: this.stats, events: this.events, diplo: this.diplo, deaths: Math.round(this.deaths) };
+    }
   }
   HB.Battle = Battle;
-  HB.makeRng = makeRng;
-  HB.simConst = { F_LANDED, F_DECOY, F_GHOST, F_STEALTH, F_ZOMBIE, F_RTB, F_TEMPLAND, F_DRYMSG, F_FUELMSG, F_FROZEN, F_LIFT, NF, ALIEN, DT, MELEE, ARROW, BULLET, SHELL, FIRE, MISSILE, CRUSH, clamp, cellOf };
+  HB.COMMANDERS = {
+    remi:    { name: 'Remi', betray: 0, accept: 0.95, propose: 0.5, blurb: 'Swarms of ancient warriors. Loyal to a fault.' },
+    gamedev: { name: 'Game Dev', betray: 1, accept: 0.85, propose: 0.4, blurb: 'Flanks, feints, curses, and holds the high ground. Will betray you.' },
+    ai:      { name: 'AI', betray: 0.35, accept: 0.6, propose: 0.15 },
+    human:   { name: 'You', betray: 0, accept: 0, propose: 0 },
+  };
 })(typeof window !== 'undefined' ? window : globalThis);

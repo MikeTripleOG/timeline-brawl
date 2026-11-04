@@ -1,4 +1,6 @@
+spectate.mp4
+v3/
 node_modules/
+test/result.png
 *.log
 .DS_Store
-spectate.mp4

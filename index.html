@@ -2,174 +2,81 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<meta name="theme-color" content="#14121c">
-<title>Timeline Brawl — history's units, one battlefield</title>
-<meta name="description" content="Draft units from 6 eras of history (Bronze Age to the Future) and watch them brawl: alliances, betrayals, Dark Age EMPs, nukes and an alien invasion.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ctext y=%22.9em%22 font-size=%2290%22%3E%E2%9A%94%3C/text%3E%3C/svg%3E">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#2b2012">
+<title>Timeline Brawl — The Five Crowns</title>
+<meta name="description" content="A tap-first top-down war game: five kingdoms, a crimson Invader, sieges, treaties and betrayal. Play solo, pass & play or online with a friend.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700;900&display=swap" rel="stylesheet">
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
 <div id="app">
-  <canvas id="cv"></canvas>
-
-  <!-- STEP 1: MODE -->
-  <section id="menu" class="screen">
-    <div class="menu-inner">
-      <h1 class="logo">TIMELINE<span>BRAWL</span></h1>
-      <p class="tag">Six eras. Same budget. Alliances, betrayal, and a Dark Age EMP.</p>
-      <button id="btn-quick" class="big-btn">⚡ QUICK BATTLE</button>
-      <div class="mode-row">
-        <button id="btn-spectate" class="mode-btn"><b>👁 Spectate FFA</b><small>Remi vs Game Dev + 2 AI</small></button>
-        <button id="btn-custom" class="mode-btn"><b>🛠 Custom</b><small>Draft vs AI · FFA · 2 players</small></button>
-        <button id="btn-challenge" class="mode-btn"><b>🎯 Challenge</b><small>Paste a friend's army code</small></button>
-      </div>
-      <h2>Featured matchups</h2>
-      <div id="featured" class="cards"></div>
-      <details class="options" id="options">
-        <summary>Options</summary>
-        <div class="opts">
-          <div class="opt"><label>Budget</label><div class="seg" id="opt-budget"><button data-v="5000">5k</button><button data-v="10000">10k</button><button data-v="20000" class="on">20k</button><button data-v="40000">40k</button></div></div>
-          <div class="opt"><label>Weather</label><div class="seg" id="opt-weather"><button data-v="day" class="on">☀ Day</button><button data-v="night">☾ Night</button><button data-v="storm">⛈ Storm</button></div></div>
-          <div class="opt"><label>Chaos events</label><div class="seg" id="opt-chaos"><button data-v="1" class="on">ON</button><button data-v="0">OFF</button></div></div>
-          <div class="opt"><label>Spectate armies</label><div class="seg" id="opt-spec"><button data-v="2">2</button><button data-v="3">3</button><button data-v="4" class="on">4</button></div></div>
-          <div class="opt"><label>Sound</label><div class="seg" id="opt-sound"><button data-v="1" class="on">ON</button><button data-v="0">OFF</button></div></div>
-        </div>
-      </details>
-      <div class="hint">
-        <b>Controls</b>
-        <span>Tap your squad, then tap ground to move or an enemy to attack.</span>
-        <span>Press &amp; hold a squad to fire its ★ lore ability.</span>
-        <span>Drag to pan, pinch or double-tap to zoom. Left alone, everyone fights on their own.</span>
-      </div>
+  <!-- title -->
+  <section id="title" class="screen on">
+    <div class="titlebg"></div>
+    <div class="titlebox">
+      <div class="logo">Timeline Brawl</div>
+      <div class="sublogo">The Five Crowns</div>
+      <div class="trial">Trial version</div>
+      <button class="btn big gold" id="bQuick">⚔ Quick Battle</button>
+      <button class="btn big" id="bPlay">Play ▸</button>
+      <div class="row2"><button class="btn" id="bCustom">Custom battle</button><button class="btn" id="bHow">How to play</button></div>
+      <div class="foot">Pre-gunpowder warfare · pike beats horse · horse beats bow · bow beats slow foot</div>
     </div>
   </section>
 
-  <!-- CUSTOM SHEET -->
-  <section id="custom" class="modal hidden">
-    <div class="panel">
-      <h2>Custom battle</h2>
-      <div class="pick">
-        <button class="pick-btn" data-mode="ai">⚔ You vs AI</button>
-        <button class="pick-btn" data-mode="ffa3">🔺 FFA: you + 2 AI armies</button>
-        <button class="pick-btn" data-mode="ffa4">✚ FFA: you + 3 AI armies</button>
-        <button class="pick-btn" data-mode="2p">👥 2 players, one phone</button>
-      </div>
-      <button class="link" data-close>cancel</button>
+  <!-- campaign map -->
+  <section id="map" class="screen">
+    <canvas id="mapcv"></canvas>
+    <div class="cartouche tl"><div class="c1">The Five Crowns</div><div class="c2">Campaign Map</div></div>
+    <div class="hudR">
+      <div class="panel supply"><div class="crate"></div><div><div class="lbl">Supply <span id="supTxt">78/120</span></div><div class="seg" id="supBar"></div><div class="lbl gold" id="goldTxt">Gold 0</div></div></div>
+      <div class="panel turn"><div class="lbl">Turn</div><div class="num" id="turnTxt">1</div></div>
     </div>
+    <div class="mapbar">
+      <div class="ticker" id="ticker"></div>
+      <div class="mapbtns"><button class="btn sm" id="bDiplo">Envoys</button><button class="btn sm" id="bLog">Chronicle</button><button class="btn sm" id="bMapMenu">☰</button><button class="seal gold" id="bEnd">End<br>Turn</button></div>
+    </div>
+    <div class="sheet" id="sheet"></div>
+    <div class="waiting" id="waiting"></div>
   </section>
 
-  <!-- CHALLENGE -->
-  <section id="challenge" class="modal hidden">
-    <div class="panel">
-      <h2>Challenge</h2>
-      <p class="muted">Paste an army code (TB-…) or a watch link from a friend.</p>
-      <textarea id="chal-code" rows="3" placeholder="TB-legion.5000"></textarea>
-      <p id="chal-err" class="err"></p>
-      <div class="row"><button class="sm-btn" data-close>Cancel</button><button id="chal-go" class="big-btn sm">DRAFT YOUR ANSWER ▶</button></div>
+  <!-- battle -->
+  <section id="battle" class="screen">
+    <canvas id="cv"></canvas>
+    <div class="cartouche tl small"><div class="c1" id="bTitle">Battle</div></div>
+    <div class="hudR">
+      <div class="panel morale" id="morPanel"></div>
+      <div class="panel turn" id="bTurnBox"><div class="lbl" id="bTurnLbl">Timer</div><div class="num" id="timer">5:00</div></div>
     </div>
+    <div class="tip" id="tip"></div>
+    <div class="bbar">
+      <button class="btn sm" id="bCurse" title="Curse an enemy regiment">☾ Curse <span id="faith"></span></button>
+      <button class="btn sm" id="bAuto">Auto</button>
+      <button class="btn sm" id="bSpeed">1×</button>
+      <button class="btn sm" id="bExit">✕</button>
+    </div>
+    <div class="banner" id="banner"><div class="bt"></div><div class="bs"></div></div>
+    <div class="dipl" id="dipl"></div>
   </section>
 
-  <!-- STEP 2: DRAFT -->
-  <section id="draft" class="screen hidden">
-    <header class="bar">
-      <button class="back" id="draft-back" aria-label="Back">✕</button>
-      <div class="title" id="draft-title">Draft</div>
-      <div class="budget"><div class="budget-fill" id="budget-fill"></div><span id="budget-txt"></span></div>
-    </header>
-    <nav class="tabs" id="era-tabs"></nav>
-    <div id="vs-line" class="vs-line hidden"></div>
-    <div id="unit-list" class="unit-list"></div>
-    <footer class="army-bar">
-      <div id="army-list" class="army-list"></div>
-      <div class="row">
-        <button id="draft-random" class="sm-btn">🎲 Auto-fill</button>
-        <button id="draft-clear" class="sm-btn">Clear</button>
-        <button id="draft-share" class="sm-btn">🔗 Share</button>
-        <button id="draft-done" class="big-btn sm">DEPLOY ▶</button>
-      </div>
-    </footer>
-  </section>
-
-  <!-- STEP 3: FIGHT / WATCH -->
-  <section id="hud" class="screen hidden passthrough">
-    <div class="strip" id="strip">
-      <div class="chips" id="chips"></div>
-      <div class="strip-mid"><span id="clock">0:00</span><span id="envtxt"></span></div>
-    </div>
-    <div class="doom" id="doom"><div id="doom-fill"></div><span id="doom-txt"></span></div>
-    <button id="btn-menu" class="corner" aria-label="Menu">☰<span id="speed-badge">1×</span></button>
-    <div id="cmenu" class="cmenu hidden">
-      <div class="cm-row"><span>Speed</span><div class="seg" id="speed-seg"><button data-v="0.5">½×</button><button data-v="1" class="on">1×</button><button data-v="2">2×</button><button data-v="4">4×</button></div></div>
-      <button id="cm-pause">❚❚ Pause</button>
-      <button id="cm-center">⌖ Re-center camera</button>
-      <button id="cm-watch">🔗 Share watch link</button>
-      <button id="cm-army">🎯 Share my army</button>
-      <button id="cm-sound">🔊 Sound on</button>
-      <button id="cm-quit">✕ Quit to menu</button>
-    </div>
-    <div id="place-help" class="place-help"></div>
-    <div id="ticker" class="ticker"></div>
-    <div id="selinfo" class="selinfo"></div>
-    <div id="offer" class="offer hidden"></div>
-    <div id="diplo" class="offer hidden"></div>
-    <button id="btn-fight" class="big-btn sm fight">FIGHT!</button>
-    <div id="countdown" class="countdown hidden"></div>
-    <div id="tip" class="tip hidden"></div>
-    <div id="toast" class="toast hidden"></div>
-  </section>
-
-  <!-- PREDICTION (featured matchups / once per session) -->
-  <section id="predict" class="modal hidden">
-    <div class="panel">
-      <h2>Who wins?</h2>
-      <p id="predict-sub" class="muted"></p>
-      <div class="pick" id="pick"></div>
-      <button id="pick-skip" class="sm-btn wide">Skip ▶</button>
-    </div>
-  </section>
-
-  <!-- UNSPENT WARNING -->
-  <section id="unspent" class="modal hidden">
-    <div class="panel">
-      <h2>Points left over</h2>
-      <p id="unspent-txt"></p>
-      <div class="row"><button id="unspent-fill" class="big-btn sm">🎲 Auto-fill</button><button id="unspent-go" class="sm-btn">Deploy anyway</button></div>
-    </div>
-  </section>
-
-  <!-- SHARE -->
-  <section id="share" class="modal hidden">
-    <div class="panel">
-      <h2 id="share-title">Share</h2>
-      <p id="share-sub" class="muted"></p>
-      <input id="share-text" readonly>
-      <div class="row"><button class="sm-btn" data-close>Close</button><button id="share-copy" class="big-btn sm">Copy</button></div>
-    </div>
-  </section>
-
-  <!-- RESULT -->
-  <section id="result" class="modal hidden">
-    <div class="panel">
-      <h2 id="res-title"></h2>
-      <p id="res-pred" class="res-pred"></p>
-      <div id="res-mvp" class="res-mvp"></div>
-      <div class="res-cols" id="res-cols"></div>
-      <p id="res-misc" class="muted"></p>
-      <div class="row">
-        <button id="res-rematch" class="big-btn sm">REMATCH</button>
-        <button id="res-watch" class="sm-btn">🔗 Watch link</button>
-        <button id="res-menu" class="sm-btn">Menu</button>
-      </div>
-    </div>
-  </section>
+  <!-- overlays -->
+  <div class="modal" id="modal"><div class="scroll" id="modalBody"></div></div>
+  <div class="cover" id="cover"></div>
+  <div class="toast" id="toast"></div>
 </div>
-<script src="js/units.js"></script>
+<script src="js/data.js"></script>
 <script src="js/sim.js"></script>
-<script src="js/world.js"></script>
-<script src="js/armies.js"></script>
+<script src="js/siege.js"></script>
+<script src="js/ai.js"></script>
+<script src="js/match.js"></script>
+<script src="js/campaign.js"></script>
 <script src="js/audio.js"></script>
 <script src="js/render.js"></script>
+<script src="js/mapview.js"></script>
+<script src="js/net.js"></script>
 <script src="js/ui.js"></script>
 </body>
 </html>
