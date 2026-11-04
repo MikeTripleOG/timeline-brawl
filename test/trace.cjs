@@ -1,5 +1,5 @@
 const path = require('path');
-for (const f of ['units', 'sim', 'armies']) require(path.join(__dirname, '../js', f + '.js'));
+for (const f of ['units', 'sim', 'world', 'armies']) require(path.join(__dirname, '../js', f + '.js'));
 const HB = globalThis.HB;
 const f = HB.FEATURED.find(x => x.id === process.argv[2]);
 const b = new HB.Battle({ armies: HB.featuredArmies(f), seed: +process.argv[3] || 1, chaos: process.argv[4] === 'chaos' });

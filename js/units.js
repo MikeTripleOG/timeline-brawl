@@ -11,7 +11,9 @@
     { name: 'Gunpowder', color: '#ff8a4a' },
     { name: 'World Wars', color: '#9fd36b' },
     { name: 'Modern', color: '#5fd0ff' },
+    { name: 'Future', color: '#ff5fd2' },
   ];
+  HB.AGE_NAMES = ['BRONZE AGE', 'MIDDLE AGES', 'GUNPOWDER AGE', 'DIESEL AGE', 'JET AGE', 'SPACE AGE'];
   const HEAVY = { melee: 0.012, arrow: 0, bullet: 0.02, shell: 0.35, fire: 0.25, missile: 1, crush: 0 };
   const MEDIUM = { melee: 0.03, arrow: 0.005, bullet: 0.05, shell: 0.6, fire: 0.45, missile: 1.2, crush: 0 };
   const AIR = { melee: 0.05, arrow: 0.03, bullet: 0.12, shell: 0.4, fire: 0.4, missile: 1, crush: 0 };
@@ -100,11 +102,35 @@
       m: 4, mrof: 1, w1: { r: 260, d: 500, rof: 4, t: MI, sp: 6, acc: 0.85, ammo: 4, heavy: true }, w2: { r: 120, d: 10, rof: 0.4, t: B, acc: 0.45, ammo: 200, air: true }, tags: ['inf', 'tech', 'radar', 'disc', 'kite'],
       lore: { id: 'roswell', name: 'ROSWELL LOCK-ON', cd: 30, desc: 'Reverse-engineered alien seekers: the next 2 missiles cannot miss and ignore jamming, cloaks and decoys.', counter: 'Only 4 missiles per team, and they are wasted on swarms.' } },
     { id: 'abrams', name: 'M1 Abrams Tank', short: 'Abrams', era: 4, role: 'Vehicle', cost: 10000, pack: 1, hp: 2600, spd: 20, rad: 7,
-      m: 0, w1: { r: 260, d: 140, rof: 2.6, t: S, sp: 14, acc: 0.95, ammo: 42 }, w2: { r: 190, d: 8, rof: 0.07, t: B, acc: 0.5, ammo: 1600, air: true }, fuel: 150, armor: HEAVY, tags: ['vehicle', 'tech', 'radar', 'disc'],
-      lore: { id: 'desertstorm', name: 'DESERT STORM LEGEND', cd: 40, desc: 'The tank that could not be killed: invulnerable for 4s and repairs 20%.', counter: 'It does not refill ammo or fuel: once dry it is just a steel box waiting to be swarmed.' } },
+      m: 0, w1: { r: 260, d: 140, rof: 2.6, t: S, sp: 13.5, acc: 0.95, ammo: 41 }, w2: { r: 190, d: 8, rof: 0.07, t: B, acc: 0.5, ammo: 1500, air: true }, fuel: 150, armor: HEAVY, tags: ['vehicle', 'tech', 'radar', 'disc'],
+      lore: { id: 'montauk', name: 'MONTAUK TIME-SLIP', cd: 40, en: 15, desc: 'The Montauk chair rewinds the tank 5 seconds: position and armour as they were, invulnerable for 1.5s while it re-phases.', counter: 'Spent shells and fuel stay spent; once dry it is just a steel box waiting to be swarmed. Dark energy (0 energy) blocks it.' } },
     { id: 'apache', name: 'AH-64 Apache', short: 'Apache', era: 4, role: 'Air', cost: 10000, pack: 1, hp: 2200, spd: 45, rad: 7,
       m: 0, w1: { r: 280, d: 120, rof: 1.2, t: MI, sp: 16, acc: 0.9, ammo: 50 }, w2: { r: 220, d: 14, rof: 0.1, t: S, sp: 3, acc: 0.6, ammo: 900, air: true }, fuel: 130, armor: AIR, tags: ['air', 'tech', 'radar'],
       lore: { id: 'ghostkyiv', name: 'GHOST OF KYIV', cd: 30, desc: 'A legendary ace takes the stick: for 6s rockets cost no ammo and incoming fire mostly misses.', counter: 'Burns fuel 3x faster, so it has to land sooner, and landed helicopters get swarmed.' } },
+
+    { id: 'psychic', name: 'Stargate Psychic Soldiers', short: 'Psychics', era: 4, role: 'Infantry', cost: 60, pack: 10, hp: 18, spd: 14, rad: 1.8,
+      m: 4, mrof: 1, w1: { r: 120, d: 8, rof: 0.8, t: B, acc: 0.6, ammo: 80, air: true }, armor: { bullet: 0.8 }, tags: ['inf', 'tech', 'radar', 'fearless'],
+      lore: { id: 'stargate', name: 'PROJECT STARGATE', cd: 25, en: 15, desc: 'Remote viewers reveal every hidden, invisible and cloaked enemy on the map for 8s and pop decoys; enemies within 150 are mind-scrambled (disordered 3s).', counter: 'Faith units with high morale (70+) resist the scramble; ninjas re-cloak once it ends.' } },
+
+    // ---------------- FUTURE ----------------
+    { id: 'mech', name: 'Battle Mech Suit', short: 'Mech', era: 5, role: 'Vehicle', cost: 4000, pack: 1, hp: 1700, spd: 16, rad: 6,
+      m: 30, mrof: 1.2, w1: { r: 200, d: 30, rof: 0.5, t: S, sp: 5, acc: 0.8, ammo: 220 }, fuel: 200, armor: HEAVY, tags: ['vehicle', 'tech', 'radar', 'disc'],
+      lore: { id: 'tesla', name: 'TESLA DEATH BEAM', cd: 22, en: 25, desc: "Tesla's lost 'teleforce' beam: 2s of 300 dmg/s on the most valuable enemy within 420, day or night, and it drains 8 energy from the victim's side.", counter: 'Eats a quarter of your energy; at 0 energy it is dead weight. EMPs knock the mech back to a Sherman.' } },
+    { id: 'drone', name: 'Drone Swarm', short: 'Drones', era: 5, role: 'Air', cost: 25, pack: 20, hp: 12, spd: 60, rad: 1.6,
+      m: 0, w1: { r: 90, d: 6, rof: 0.6, t: B, acc: 0.5, ammo: 60, air: true }, fuel: 90, armor: { melee: 1, arrow: 0.8, bullet: 1, shell: 1, fire: 1, missile: 1, crush: 0 }, tags: ['air', 'tech'],
+      lore: { id: 'haarp', name: 'HAARP WEATHER CONTROL', cd: 30, en: 20, desc: 'The swarm seeds the ionosphere: a 70-wide lightning storm rages over the enemy for 6s, striking anything not on your side.', counter: 'Hits allies and neutral armies too; troops that scatter out of the storm are safe. Only anti-air can touch the drones.' } },
+    { id: 'plasma', name: 'Plasma Troopers', short: 'Plasma', era: 5, role: 'Infantry', cost: 40, pack: 20, hp: 26, spd: 15, rad: 1.9,
+      m: 6, mrof: 0.9, w1: { r: 150, d: 16, rof: 0.6, t: F, sp: 3, acc: 0.65, en: 0.02, air: true }, armor: { bullet: 0.6, arrow: 0.3, melee: 0.8 }, tags: ['inf', 'tech', 'radar', 'disc'],
+      lore: { id: 'glocke', name: 'DIE GLOCKE', cd: 28, en: 20, desc: 'The Nazi Bell spins up: every unit in a 55-wide bubble near the target freezes solid for 4s (vehicles 2s).', counter: 'Freezes your own and allied troops in the bubble too. Plasma guns run on energy: at 0 energy they fall silent.' } },
+    { id: 'ufo', name: 'Roswell UFO Craft', short: 'UFO', era: 5, role: 'Air', cost: 6000, pack: 1, hp: 900, spd: 50, rad: 7,
+      m: 0, w1: { r: 200, d: 40, rof: 0.8, t: S, sp: 6, acc: 0.85, en: 0.15, air: true }, fuel: 0, armor: AIR, shield: 600, tags: ['air', 'tech', 'radar'],
+      lore: { id: 'antigrav', name: 'AREA 51 ANTIGRAVITY', cd: 24, en: 20, desc: 'Passive: hovers on a 600-point regenerating shield. Ability: lifts every enemy ground unit within 60 of the target into the air for 2.5s, then drops them (30% HP).', counter: 'Any EMP drops the shield and grounds it; a Dark Age EMP turns it into a weather balloon. Weapons run on energy.' } },
+    { id: 'darkemp', name: 'Dark Age EMP (item)', short: 'Dark Age EMP', era: 5, role: 'Item', cost: 12000, pack: 1, hp: 400, spd: 0, rad: 5,
+      m: 0, armor: MEDIUM, tags: ['siege', 'item'],
+      lore: { id: 'darkemp', name: 'DARK AGE EMP', cd: 120, cd0: 22, en: 40, desc: 'The most expensive item in the game. A white flash, then every powered unit in a 200-wide blast, yours included, is knocked back 1-2 eras (Abrams → Sherman → Knight, Apache → Biplane, Plasma → Musketeers) and re-evolves one era at a time over ~60s.', counter: 'Hits your own tech too. Ancient units are immune, faith units only lose morale. Destroy the device before it charges.' } },
+    { id: 'nuke', name: 'Tactical Nuke (item)', short: 'Tactical Nuke', era: 4, alsoEra: 5, role: 'Item', cost: 5000, pack: 1, hp: 300, spd: 0, rad: 5,
+      m: 0, armor: MEDIUM, tags: ['siege', 'item'],
+      lore: { id: 'nuke', name: 'TACTICAL NUKE', cd: 999, cd0: 28, en: 30, desc: 'One launch: after a 2.5s warning a nuclear blast levels everything within 80, friend or foe, and leaves fallout. Each nuke fills the Doomsday meter by 40.', counter: 'Kill the silo before launch, or spread out. Fill the Doomsday meter and THEY arrive, hitting the biggest nuker hardest.' } },
 
     // ---------------- hidden spawn-only units ----------------
     { id: 'hoplite', hidden: true, name: 'Greek Hoplites', short: 'Hoplites', era: 0, role: 'Infantry', cost: 3, pack: 30, hp: 14, spd: 14, rad: 1.9,
@@ -113,6 +139,17 @@
       m: 5, mrof: 0.8, tags: ['inf', 'fearless'] },
     { id: 'angel', hidden: true, name: 'Angels of Mons', short: 'Ghost Bowmen', era: 3, role: 'Ranged', cost: 0, pack: 20, hp: 1, spd: 0, rad: 1.7,
       m: 0, w1: { r: 160, d: 5, rof: 1, t: A, acc: 0.6, air: true }, armor: { arrow: 0, bullet: 0, melee: 0, shell: 0, fire: 0, missile: 0, crush: 0 }, tags: ['ghost'] },
+    { id: 'biplane', hidden: true, name: 'Sopwith Biplane', short: 'Biplane', era: 3, role: 'Air', cost: 300, pack: 1, hp: 140, spd: 85, rad: 5,
+      m: 0, w1: { r: 90, d: 6, rof: 0.15, t: B, sp: 2, acc: 0.4, ammo: 500, air: true }, fuel: 90, armor: AIR, tags: ['air', 'tech'] },
+    { id: 'pigeon', hidden: true, name: 'Carrier Pigeons', short: 'Pigeons', era: 3, role: 'Air', cost: 1, pack: 20, hp: 3, spd: 30, rad: 1.2,
+      m: 0, armor: AIR, tags: ['air'] },
+    { id: 'balloon', hidden: true, name: 'Weather Balloon', short: 'Weather Balloon', era: 3, role: 'Air', cost: 10, pack: 1, hp: 60, spd: 8, rad: 5,
+      m: 0, armor: AIR, tags: ['air'] },
+    { id: 'mothership', hidden: true, name: 'Alien Mothership', short: 'Mothership', era: 5, role: 'Vehicle', cost: 20000, pack: 1, hp: 9000, spd: 9, rad: 15,
+      m: 0, w1: { r: 210, d: 45, rof: 0.5, t: MI, sp: 10, acc: 0.9, air: true }, w2: { r: 170, d: 10, rof: 0.1, t: B, acc: 0.5, air: true },
+      armor: { melee: 0.35, arrow: 0.25, bullet: 0.3, shell: 0.6, fire: 0.5, missile: 0.8, crush: 0 }, tags: ['alien', 'hover', 'fearless', 'siege'] },
+    { id: 'aliendrone', hidden: true, name: 'Alien Drone', short: 'Alien Drone', era: 5, role: 'Infantry', cost: 30, pack: 10, hp: 30, spd: 36, rad: 2,
+      m: 4, mrof: 1, w1: { r: 85, d: 5, rof: 0.5, t: B, acc: 0.6, air: true }, armor: { arrow: 0.6, bullet: 0.7 }, tags: ['alien', 'hover', 'fearless'] },
     { id: 'decoy', hidden: true, name: 'Inflatable Decoy', short: 'Decoy', era: 3, role: 'Vehicle', cost: 0, pack: 4, hp: 1, spd: 0, rad: 6,
       m: 0, tags: ['vehicle', 'decoy'] },
   ];
@@ -132,7 +169,19 @@
     u.canAir = !!((u.w1 && u.w1.air) || (u.w2 && u.w2.air));
     u.maxR = Math.max(u.w1 ? u.w1.r : 0, u.w2 ? u.w2.r : 0);
     u.hasAmmo = !!((u.w1 && u.w1.ammo) || (u.w2 && u.w2.ammo));
+    u.hover = !!u.tagset.hover; u.item = !!u.tagset.item;
+    // FAITH vs POWER: ancient/medieval/gunpowder abilities spend morale; WW/modern/future spend energy
+    u.power = u.era >= 3;
+    u.powered = u.power && (u.veh || u.air || u.tech) && !u.item && !u.tagset.alien && !u.hidden;
   });
+  // DARK AGE de-evolution chains (each step = one knock-back level)
+  HB.DEVO = {
+    abrams: ['sherman', 'knight'], sherman: ['hussar', 'knight'], mech: ['sherman', 'knight'],
+    apache: ['biplane', 'hussar', 'knight'], p51: ['biplane', 'hussar', 'knight'],
+    seal: ['tommy', 'musketeer', 'longbow'], javelin: ['tommy', 'musketeer', 'longbow'], psychic: ['tommy', 'musketeer', 'longbow'],
+    plasma: ['tommy', 'musketeer', 'longbow'], tommy: ['musketeer', 'longbow'], mgnest: ['cannon', 'greekfire'],
+    drone: ['pigeon'], ufo: ['balloon'],
+  };
   HB.UNIT = {};
   HB.UNITS.forEach(u => (HB.UNIT[u.id] = u));
 })(typeof window !== 'undefined' ? window : globalThis);

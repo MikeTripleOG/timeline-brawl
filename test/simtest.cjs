@@ -1,6 +1,6 @@
 // Headless balance runner: node test/simtest.cjs [runs] [chaos]
 const path = require('path');
-for (const f of ['units', 'sim', 'armies']) require(path.join(__dirname, '../js', f + '.js'));
+for (const f of ['units', 'sim', 'world', 'armies']) require(path.join(__dirname, '../js', f + '.js'));
 const HB = globalThis.HB;
 const runs = +process.argv[2] || 6, chaos = process.argv[3] === 'chaos';
 const only = process.argv[4];
