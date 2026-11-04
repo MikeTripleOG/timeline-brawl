@@ -159,7 +159,7 @@ img.uface { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; ma
 #title.ready .ka-strip .ldbar { display: none; } #title.ready .ka-strip .tapgo { display: block; }
 @keyframes tapPulse { 0%, 100% { opacity: .55; transform: scale(.97); } 50% { opacity: 1; transform: scale(1.03); } }
 #title.keyart .titlebox { background: rgba(243,228,190,.94); }
-#title.keyart.ka-portrait .titlebox { top: calc(var(--logoH, 0px) * .86 + 8px); transform: translateX(-50%); max-height: calc(100% - var(--logoH, 0px) * .86 - 16px); overflow-y: auto; }
+#title.keyart.ka-portrait .titlebox { top: calc(var(--logoH, 0px) * .93 + 6px); transform: translateX(-50%); max-height: calc(100% - var(--logoH, 0px) * .93 - 14px); overflow-y: auto; }
 #title.keyart.ka-landscape .titlebox { left: auto; right: max(3vw, env(safe-area-inset-right)); top: 50%; transform: translateY(-50%); width: min(42vw, 360px); max-height: 94%; overflow-y: auto; padding: 12px 14px 10px; }
 #title.keyart.ka-landscape .titlebox .btn.big { padding: 10px; margin: 5px 0; font-size: 16px; }
 #title.keyart.ka-landscape .titlebox .foot { display: none; }
