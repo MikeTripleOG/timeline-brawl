@@ -6,15 +6,42 @@
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const BLUE = '#2f62c0', RED = '#b8302a';
   const crestCache = {};
-  const crest = (k, size) => { const key = k + ':' + (size || 26); if (!crestCache[key]) crestCache[key] = HB.crestURL(K[k], size || 26); return `<img src="${crestCache[key]}" alt="">`; };
+  const crest = (k, size) => { const src = HB.artCrestSrc && HB.artCrestSrc(K[k].id); if (src) return `<img class="crestimg" src="${src}" width="${size || 24}" height="${size || 24}" style="width:${size || 24}px;height:${size || 24}px" alt="${esc(K[k].name)} crest">`; const key = k + ':' + (size || 26); if (!crestCache[key]) crestCache[key] = HB.crestURL(K[k], size || 26); return `<img src="${crestCache[key]}" alt="">`; };
   let screen = 'title';
   function show(id) {
-    for (const s of document.querySelectorAll('.screen')) s.classList.toggle('on', s.id === id);
+    const changed = screen !== id;
+    for (const s of document.querySelectorAll('.screen')) { s.classList.toggle('on', s.id === id); if (s.id === id && changed) { s.classList.remove('enter'); void s.offsetWidth; s.classList.add('enter'); } }
     screen = id; closeSheet();
+    if (changed) { clearToast(); hideCard(); const f = $('fader'); f.classList.remove('go'); void f.offsetWidth; f.classList.add('go'); }
     if (id === 'map') MV.resize(); if (id === 'battle') R.resize();
+    if (HB.Audio) { if (id === 'map') HB.Audio.startMusic(); else HB.Audio.stopMusic(); }
   }
+  // toasts expire on their own, and a new screen clears a stale one
   let toastT = 0;
-  function toast(msg, ms) { const t = $('toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), ms || 2200); }
+  function toast(msg, ms) { const t = $('toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), Math.min(ms || 2200, 4500)); }
+  function clearToast() { clearTimeout(toastT); $('toast').classList.remove('on'); }
+  // ---------- first-time tips (non-blocking, skippable) and notice cards ----------
+  const LSK = (k) => 'tb.tip.' + k;
+  const seenTip = (k) => { try { return localStorage.getItem('tb.tips.off') === '1' || localStorage.getItem(LSK(k)) === '1'; } catch (e) { return false; } };
+  const markTip = (k) => { try { localStorage.setItem(LSK(k), '1'); } catch (e) { /* private mode */ } };
+  let tutQ = [], tutKey = '';
+  function tutorial(key, hints) { if (seenTip(key)) return; tutKey = key; tutQ = hints.slice(); nextHint(); }
+  function nextHint() {
+    const t = $('tut'); if (!tutQ.length) { t.classList.remove('on', 'card'); if (tutKey) markTip(tutKey); tutKey = ''; return; }
+    const total = t.dataset.total = tutQ.total || tutQ.length; tutQ.total = total; const h = tutQ.shift();
+    $('tutN').textContent = total > 1 ? 'Tip ' + (total - tutQ.length) + ' of ' + total : 'First time'; $('tutT').innerHTML = h; $('tutSkip').style.display = total > 1 ? '' : 'none'; $('tutNext').textContent = tutQ.length ? 'Next' : 'Got it';
+    t.classList.remove('card'); t.classList.add('on'); sfx('page');
+  }
+  function once(key, html) { if (seenTip(key) || $('tut').classList.contains('on')) return; tutKey = key; tutQ = [html]; nextHint(); }
+  $('tutNext').onclick = () => { sfx('select'); nextHint(); };
+  $('tutSkip').onclick = () => { try { localStorage.setItem('tb.tips.off', '1'); } catch (e) { /* private mode */ } tutQ = []; nextHint(); toast('Tips off — How to play has them all'); };
+  function showCard(html, ms) { const t = $('tut'); tutQ = []; tutKey = ''; $('tutN').textContent = ''; $('tutT').innerHTML = html; $('tutSkip').style.display = 'none'; $('tutNext').textContent = 'OK'; t.classList.add('on', 'card'); clearTimeout(showCard.t); showCard.t = setTimeout(() => { if (t.classList.contains('card')) t.classList.remove('on', 'card'); }, ms || 7000); }
+  function hideCard() { const t = $('tut'); if (t.classList.contains('card')) t.classList.remove('on', 'card'); }
+  const N = () => HB.names();
+  const oathArt = () => HB.ART && HB.ART.unit && HB.ART.unit.oathbound;
+  function oathCard(small) { const a = oathArt(); if (!a) return ''; return `<div class="ucard${small ? ' sm' : ''}"><img src="${a.card}" alt="${esc(N().recruits)}"><div><b>${esc(N().recruits)}</b><span>${esc(N().tribute)} recruits raised as Horde regulars: crimson lamellar, dragon shields, sabres. Steady (morale 95%), cheap to keep.</span></div></div>`; }
+  // ---------- victory / defeat flourish ----------
+  function flourish(t, sub, good) { const f = $('flourish'); $('flT').textContent = t; $('flS').textContent = sub || ''; f.classList.remove('on', 'good', 'bad'); void f.offsetWidth; f.classList.add('on', good ? 'good' : 'bad'); clearTimeout(flourish.t); flourish.t = setTimeout(() => f.classList.remove('on'), 2600); }
   // ---------- modal scroll ----------
   function modal(html, handlers, opts) {
     const box = $('modalBody'); box.innerHTML = (opts && opts.noClose ? '' : '<button class="close" data-a="close">✕</button>') + html;
@@ -23,11 +50,11 @@
     return box;
   }
   function closeModal() { $('modal').classList.remove('on'); $('modalBody').innerHTML = ''; }
-  function sheet(html, handlers) {
-    const s = $('sheet'); s.innerHTML = '<button class="x" data-a="close">✕</button>' + html; s.classList.add('on');
+  function sheet(html, handlers, opts) {
+    const s = $('sheet'); s.innerHTML = '<button class="x" data-a="close" aria-label="Close">✕</button>' + html; s.classList.add('on'); s.classList.toggle('strip', !!(opts && opts.strip)); document.body.classList.toggle('hasStrip', !!(opts && opts.strip)); document.body.classList.toggle('stripOpen', !!(opts && opts.strip && CP.stripOpen)); s.classList.toggle('open', !!(opts && opts.strip && CP.stripOpen));
     s.onclick = (e) => { const el = e.target.closest('[data-a]'); if (!el) return; sfx('select'); if (el.dataset.a === 'close') return closeSheet(); if (handlers && handlers[el.dataset.a]) handlers[el.dataset.a](el); };
   }
-  function closeSheet() { const s = $('sheet'); s.classList.remove('on'); s.innerHTML = ''; if (MV) { MV.sel = null; MV.hl = []; } }
+  function closeSheet() { const s = $('sheet'); s.classList.remove('on', 'strip', 'open'); s.innerHTML = ''; document.body.classList.remove('hasStrip', 'stripOpen'); if (MV) { MV.sel = null; MV.hl = []; } }
   function cover(html, onGo) { const c = $('cover'); c.innerHTML = html + '<button class="btn big gold" style="max-width:300px" id="coverGo">Continue</button>'; c.classList.add('on'); $('coverGo').onclick = () => { c.classList.remove('on'); onGo && onGo(); }; }
 
   // ---------- canvases ----------
@@ -69,7 +96,12 @@
     $('bStart').style.display = BR.deploy ? '' : 'none';
     if (BR.deploy) { banner('Deploy — ' + (m.title || 'Battle'), 'Drag regiments inside the gold zone, swipe to face, tap twice for formations. Press Start when ready.', 4.5); tip(intro); }
     else { banner(m.title || 'Battle', ctl.length ? intro : 'Spectating — ' + m.sides.map(s => s.name).join(' vs '), 3.2); tip(ctl.length ? 'Tap a regiment twice (or hold it) for its formation ring. Swipe on open ground to turn it.' : 'Pinch to zoom. The camera follows the fighting.'); }
-    sfx('horn');
+    sfx('horn'); sfx('charge');
+    if (ctl.length) tutorial('battle', [
+      '<b>Deploy.</b> Drag your blocks inside the gold zone. Tap a block twice for its formation ring, then press <b>Start</b>.',
+      '<b>Counters.</b> Pikes stop horse — a braced pike line lowers its spears and a charge breaks on it. Horse rides down archers. Archers punish slow heavy foot.',
+      '<b>Flanks and rear.</b> Hitting a block from the side or behind flashes FLANKED / REAR CHARGE: big damage and a morale shock. Rout spreads to neighbours.',
+      '<b>Curse meter (☾).</b> Kills and charges fill your faith. At ' + HB.CURSE.cost + ' faith, tap Curse, then an enemy block to weaken it. Units with a mythic gift (like Rome\'s Blessing of Mars) spend faith too.']);
   }
   let bannerT = 0;
   function banner(t, s, sec) { const el = $('banner'); el.querySelector('.bt').textContent = t; el.querySelector('.bs').textContent = s || ''; el.classList.add('on'); clearTimeout(bannerT); bannerT = setTimeout(() => el.classList.remove('on'), (sec || 2.4) * 1000); }
@@ -193,7 +225,7 @@
     $('morPanel').innerHTML = h;
     if (BR.turn && b.S) { $('bTurnLbl').textContent = 'Turn'; $('timer').textContent = BR.turn; }
     else { const left = Math.max(0, b.tmax - b.t); $('bTurnLbl').textContent = 'Timer'; $('timer').textContent = Math.floor(left / 60) + ':' + String(Math.floor(left % 60)).padStart(2, '0'); }
-    if (BR.ctl.length) { const f = b.fac[BR.me]; $('faith').textContent = Math.floor(f.faith); $('bCurse').disabled = f.faith < HB.CURSE.cost; }
+    if (BR.ctl.length) { const f = b.fac[BR.me]; $('faith').textContent = Math.floor(f.faith) + '/' + HB.CURSE.cost; $('bCurse').disabled = f.faith < HB.CURSE.cost; if (f.faith >= HB.CURSE.cost && !b.over) once('curse', '<b>The Curse is ready.</b> The ☾ meter counts your army\'s <b>faith</b> (it builds up as the battle rages). Tap <b>Curse</b>, then an enemy block: −30% attack and shaken morale for a while. Oathbreakers pay double.'); }
     // pending alliance offer to me (FFA)
     const d = $('dipl');
     if (BR.ctl.length && b.fac[BR.me].pending && !BR.lock) {
@@ -205,20 +237,21 @@
     const b = BR.b;
     switch (e.k) {
       case 'volley': if (!e.wall || Math.random() < 0.3) sfx('shot', e.kind); break;
-      case 'impact': if (e.zone === 2) { sfx('boom', true); sfx('horn'); } else if (e.cav) sfx('boom', false); else sfx('clash'); break;
+      case 'impact': if (e.braced) sfx('braced'); else if (e.zone) { sfx('impact', e.zone); if (e.zone === 2) sfx('horn'); } else if (e.cav) { sfx('charge'); sfx('impact', 0); } else sfx('clash'); break;
       case 'ram': sfx('thud'); break;
-      case 'breach': sfx('event', 'breach'); break;
+      case 'breach': sfx('rubble'); sfx('event', 'breach'); break;
+      case 'ability': sfx('ability'); if (BR.ctl.includes(e.side) && e.lore === 'mars') once('mars', '<b>Blessing of Mars</b> — your Legionaries spent faith: +40% attack, full cohesion and +25 morale for 9 seconds. Use it when a grinding melee is about to turn. Enemies answer by hitting the blessed block in the flank.'); break;
       case 'callout': if (e.big) sfx('callout'); break;
-      case 'ability': sfx('ability'); break;
       case 'curse': sfx('event', 'curse'); break;
       case 'deny': if (BR.ctl.includes(e.side)) { toast(e.msg); sfx('deny'); } break;
       case 'event': banner(e.text, e.sub, e.big ? 3.4 : 2.6); sfx('event', e.id); break;
       case 'betrayed': banner('BETRAYAL', e.text, 3); sfx('event', 'betrayal'); break;
       case 'diplo': if (e.type !== 'offer' || !BR.ctl.includes(e.b)) toast(e.text || ''); break;
-      case 'rout': if (BR.ctl.includes(e.side) && Math.random() < 0.5) tip('A regiment is routing! Rally comes if no enemy is near — or pull it back.'); break;
+      case 'rout': sfx('rout'); if (BR.ctl.includes(e.side) && Math.random() < 0.5) tip('A regiment is routing! Rally comes if no enemy is near — or pull it back.'); break;
       case 'over': break;
     }
     if (e.k === 'impact' && e.zone === 2 && b) BR.slow = 1.1;
+    if (R.slowReq > 0) { BR.slow = Math.max(BR.slow || 0, R.slowReq); R.slowReq = 0; } // flank hits, breaches and routs ask the renderer for a beat of slow motion
   }
   function battleFrame(dt) {
     const b = BR.b; if (!b) return;
@@ -243,10 +276,11 @@
     }
     BR.hudT -= dt; if (BR.hudT <= 0) { BR.hudT = 0.25; battleHud(); }
     if (BR.tipT > 0) { BR.tipT -= dt; if (BR.tipT <= 0) $('tip').style.opacity = 0; }
-    if (b.over) { BR.endT += dt; if (BR.endT > 2.2 && !BR.ended) { BR.ended = true; endBattle(); } } else BR.ended = false;
+    if (b.over) { BR.endT += dt; if (BR.endT > 1.4 && !BR.flo) { BR.flo = true; const s = b.summary(), won = BR.ctl.length && s.winners.some(w => BR.ctl.includes(w)); flourish(BR.ctl.length === 1 ? (won ? 'Victory' : 'Defeat') : (s.winner >= 0 ? b.fac[s.winner].name : 'No one') + ' wins', b.siegeResult === 'keep' ? 'The keep has fallen' : b.siegeResult === 'held' ? 'The walls held' : '', !BR.ctl.length || won); }
+      if (BR.endT > 2.3 && !BR.ended) { BR.ended = true; endBattle(); } } else { BR.ended = false; BR.flo = false; }
   }
   function endBattle() {
-    const b = BR.b, m = BR.m; if (!b) return;
+    const b = BR.b, m = BR.m; if (!b) return; $('flourish').classList.remove('on');
     const s = b.summary(); const won = BR.ctl.length && s.winners.some(w => BR.ctl.includes(w));
     if (BR.ctl.length) sfx(won ? 'win' : 'lose');
     const wname = s.winner >= 0 ? b.fac[s.winner].name : 'No one';
@@ -353,9 +387,28 @@
       <p><b>Elephants</b> crush lines but panic under javelins and trample their own side.</p>
       <p><b>Sieges:</b> walls in rings — outer, inner, keep. Rams break gates, towers dock, trebuchets breach, infantry put up ladders. Breach a ring and the fight moves inward. Take the keep to win; defenders win if the walls hold.</p>
       <p><b>Faith &amp; the gods:</b> curse an enemy regiment; after a long, bloody, treacherous war the Gods' Wrath may descend late in a battle — a titan walks the field and forces a truce. Oathbreakers are cursed.</p>
-      <p><b>Campaign:</b> move armies along roads, recruit at capitals, send envoys with treaties. A walled capital means a siege. The Horde wins with three crowns; the kingdoms win by taking its camp.</p></div>
+      <p><b>Campaign:</b> move armies along roads, recruit at capitals, send envoys with treaties. A walled capital means a siege. The Horde wins with three crowns; the kingdoms win by taking its camp.</p>
+      <p><b>${HB.names().tribute}:</b> a Treaty of Tribute can demand a ${HB.names().tribute} of young recruits. Three turns later they return as <b>${HB.names().recruits}</b> in the army of whoever took them. The Horde demands it often.</p></div>
       <button class="btn gold" data-a="close">To war</button>`);
   }
+  function pikesVsCharge() { // Quick Battle preset: a braced phalanx against a lancer charge
+    const mac = HB.FACTION.macedon, mon = HB.FACTION.mongols, ph = mac.roster.findIndex(r => r.name === 'Phalangites'), ar = mac.roster.findIndex(r => r.t === 'archer'), ke = mon.roster.findIndex(r => r.name === 'Keshig lancers'), ha = mon.roster.findIndex(r => r.t === 'horsearcher');
+    const m = HB.makeMatch({ seed: (Math.random() * 1e9) >>> 0, budget: 1000, terrain: 'open', weather: 'clear', title: 'Pikes vs Charge',
+      sides: [{ faction: 'macedon', cmd: 'human', name: 'Macedon phalanx', picks: [ph, ph, ph, ph, ph, ar, ar] }, { faction: 'mongols', cmd: 'remi', name: 'Keshig charge', picks: [ke, ke, ke, ke, ke, ke, ha, ha] }] });
+    startBattle(m, { ctl: [0] }); tip('Keep the pikes still and facing the horse: the spears come down and the charge breaks on them — BRACED.');
+  }
+  function applyConfig() { // every title string lives in HB.CONFIG (js/config.js); art drops in through HB.ART (tools/import_art.py)
+    const CF = HB.CONFIG || {};
+    for (const [id, v] of [['logoTxt', CF.title], ['ldLogo', CF.title], ['subTxt', CF.subtitle], ['ldSub', CF.subtitle], ['tagTxt', CF.tag]]) if (v && $(id)) $(id).textContent = v;
+    if (CF.title) document.title = CF.title + (CF.subtitle ? ' — ' + CF.subtitle : '');
+    const c1 = document.querySelector('#map .cartouche .c1'); if (c1 && CF.subtitle) c1.textContent = CF.subtitle;
+    if (HB.ART && HB.ART.title) for (const el of document.querySelectorAll('.titlebg, .ldbg')) el.style.backgroundImage = 'url(' + HB.ART.title + ')';
+    $('crestRow').innerHTML = K.map((k, i) => crest(i, 30)).join('');
+    syncMute();
+  }
+  function syncMute() { const m = HB.Audio && HB.Audio.muted; $('bMute').textContent = m ? '🔇' : '🔊'; $('bMute').setAttribute('aria-pressed', m ? 'true' : 'false'); $('bMute').title = m ? 'Sound off — tap to turn on' : 'Sound on — tap to mute'; }
+  $('bMute').onclick = () => { if (!HB.Audio) return; HB.Audio.unlock(); HB.Audio.setMuted(!HB.Audio.muted); syncMute(); sfx('select'); };
+  $('bPreset').onclick = () => { HB.Audio && HB.Audio.unlock(); pikesVsCharge(); };
   $('bQuick').onclick = () => { HB.Audio && HB.Audio.unlock(); quickBattle(); };
   $('bPlay').onclick = () => { HB.Audio && HB.Audio.unlock(); playMenu(); };
   $('bCustom').onclick = () => { HB.Audio && HB.Audio.unlock(); customMenu(); };
@@ -365,9 +418,14 @@
   //  CAMPAIGN
   // =====================================================================
   const CP = { st: null, local: [], cur: -1, queue: [], draft: null, online: null, spectate: false, timer: 0, waiting: false, shown: {} };
-  const SAVE = 'tb3-campaign';
-  function loadSaved() { try { const s = JSON.parse(localStorage.getItem(SAVE) || 'null'); return s && s.st && s.st.v === 3 && !s.st.over ? s : null; } catch (e) { return null; } }
-  function save() { if (CP.online || CP.spectate || !CP.st) return; try { localStorage.setItem(SAVE, JSON.stringify({ st: CP.st, local: CP.local })); } catch (e) { /* storage full or blocked */ } }
+  const SAVE = 'tb-campaign', SAVE_V = 4; // bump SAVE_V whenever the campaign state changes shape: older saves are dropped, never half-loaded
+  function validSave(s) { const st = s && s.st; return !!(s && s.v === SAVE_V && st && st.v === 3 && !st.over && Array.isArray(st.owner) && st.owner.length === P.length && Array.isArray(st.armies) && Array.isArray(st.gold) && st.gold.length === K.length && Array.isArray(s.local) && s.local.length); }
+  function loadSaved() {
+    try { localStorage.removeItem('tb3-campaign'); } catch (e) { /* ignore */ } // the pre-versioning key
+    try { const s = JSON.parse(localStorage.getItem(SAVE) || 'null'); if (validSave(s)) return s; if (s) localStorage.removeItem(SAVE); } catch (e) { try { localStorage.removeItem(SAVE); } catch (e2) { /* ignore */ } }
+    return null;
+  }
+  function save() { if (CP.online || CP.spectate || !CP.st) return; try { localStorage.setItem(SAVE, JSON.stringify({ v: SAVE_V, st: CP.st, local: CP.local })); } catch (e) { /* storage full or blocked */ } }
   function startCampaign(o) {
     const seed = o.seed || ((Math.random() * 1e9) >>> 0);
     const st = C.create({ seed, seats: K.map((k, i) => ({ cmd: o.humans.includes(i) ? 'human' : 'ai' })) });
@@ -398,9 +456,10 @@
   function mapHud() {
     const st = CP.st, f = CP.cur >= 0 ? CP.cur : HB.INV;
     const sup = Math.round(st.supply[f]);
-    $('supTxt').textContent = sup + '/' + C.SUPPLY_CAP;
+    $('supTxt').textContent = sup + '/' + C.SUPPLY_CAP + (sup < 30 ? ' ⚠ low' : ''); $('supTxt').classList.toggle('supplow', sup < 30);
+    const pay = st.pay ? st.pay[f] || 0 : 0;
     let seg = ''; for (let i = 0; i < 12; i++) seg += `<i class="${sup >= (i + 1) * C.SUPPLY_CAP / 12 - 4 ? 'on' : ''}"></i>`; $('supBar').innerHTML = seg;
-    $('goldTxt').textContent = 'Gold ' + Math.round(st.gold[f] - plannedGold()) + (CP.cur >= 0 ? '' : ' · ' + K[f].name);
+    $('goldTxt').textContent = 'Gold ' + Math.round(st.gold[f] - plannedGold()) + (pay ? ' (−' + pay + '/turn)' : '') + (CP.cur >= 0 ? '' : ' · ' + K[f].name);
     $('turnTxt').textContent = st.turn;
     $('ticker').innerHTML = st.log.slice(-2).map(l => `<div>${l.f >= 0 ? '<b style="color:' + K[l.f].color + '">◆</b> ' : ''}${esc(l.text)}</div>`).join('');
   }
@@ -417,9 +476,20 @@
   }
   function nextSeat() {
     const s = CP.queue.shift();
-    const go = () => { CP.cur = s; CP.draft = { mv: {}, rc: [], of: [], rs: {} }; for (const a of CP.st.armies) if (a.f === s && a.dest != null && a.dest !== a.p) CP.draft.mv[a.id] = a.dest; refreshArrows(); MV.setState(CP.st, s); MV.center(capitalOf(s)); mapHud(); $('bEnd').disabled = false; offersFor(s); };
+    const go = () => { CP.cur = s; CP.draft = { mv: {}, rc: [], of: [], rs: {} }; for (const a of CP.st.armies) if (a.f === s && a.dest != null && a.dest !== a.p) CP.draft.mv[a.id] = a.dest; refreshArrows(); MV.setState(CP.st, s); MV.center(capitalOf(s)); mapHud(); $('bEnd').disabled = false; headsUp(s); offersFor(s); };
     if (CP.local.length > 1 && !CP.online) cover(`${crest(s, 45)}<h2>${esc(K[s].name)}</h2><p>Pass the device to the ruler of ${esc(K[s].name)}.<br>Turn ${CP.st.turn}</p>`, go);
     else go();
+  }
+  function headsUp(s) { // start-of-turn warnings: the Horde closing on you, your supply, late marches
+    const st = CP.st; CP.eta = CP.eta || {};
+    MV.warn = s === HB.INV ? [] : C.hordeThreats(st, s);
+    if (MV.warn.length) { const t = MV.warn.slice().sort((a, b) => a.eta - b.eta)[0]; sfx('warn'); toast(`⚠ The Horde rides on ${P[t.p].name}${t.eta <= 1 ? ' — next turn' : ' — ' + t.eta + ' turns away'} (strength ${Math.round(t.str)} vs your ${Math.round(t.def)}). Recruit there or call armies home.`, 4500); }
+    else if (s === HB.INV && st.supply[s] < 30) { sfx('warn'); toast('⚠ Supply low (' + Math.round(st.supply[s]) + '): pull armies back toward the camp or take a town, or men start to starve.', 4500); }
+    for (const a of st.armies) { const e = CP.eta[a.id]; if (!e || a.f !== s) continue; if (a.dest == null || a.dest === a.p) { delete CP.eta[a.id]; continue; } if (st.turn >= e.turn) { const left = C.dist(a.dest)[a.p]; e.turn = st.turn + left; toast(`${K[s].name}'s march on ${P[a.dest].name} is delayed (a battle or a blocked road) — new ETA turn ${e.turn}.`, 3800); } }
+    if (s >= 0) tutorial('campaign', [
+      '<b>Your armies.</b> Tap an army, then any province to march there. Far marches take several turns; the gold tag shows the ETA.',
+      '<b>Gold.</b> Every regiment costs upkeep each turn (more abroad). Capitals and towns pay income; if the chest runs dry, men desert.',
+      '<b>Envoys.</b> Treaties of tribute, truce, alliance — or the Grand Coalition against the Horde. Watch for the red ⚠: the Horde is coming.']);
   }
   function offersFor(s) {
     const st = CP.st, list = st.offers.filter(o => o.to === s && !o.done && CP.draft.rs[o.id] == null);
@@ -435,7 +505,7 @@
     if (g.gold) t.push([ICON.gold, g.gold + ' Gold']);
     if (g.supply) t.push([ICON.supply, g.supply + ' Supplies']);
     if (g.land != null && g.land >= 0) t.push([ICON.land, 'Cede ' + P[g.land].name]);
-    if (g.levy) t.push([ICON.levy, (o.from === HB.INV ? 'Janissary levy: ' : 'Levy of ') + g.levy + ' recruits (ready in 3 turns)']);
+    if (g.levy) t.push([ICON.levy, HB.names().tribute + ': ' + g.levy + ' ' + HB.names().recruits + ' (ready in 3 turns)']);
     if (o.kind !== 'alliance' && o.kind !== 'coalition') t.push([ICON.truce, 'Truce: ' + (o.truce || 4) + ' turns']);
     return t.map(([i, s]) => `<div class="term"><i>${i}</i><span>${esc(s)}</span></div>`).join('');
   }
@@ -444,7 +514,7 @@
     const from = K[o.from], to = K[o.to];
     modal(`<div class="crests">${crest(o.from, 52)}<span>⚜</span>${crest(o.to, 52)}</div><h2>${tName(o.kind)}</h2>
       <div class="muted">${esc(from.name)} ${o.kind === 'tribute' ? 'demands of' : 'offers'} ${esc(to.name)}</div>
-      <div class="terms">${termsHtml(o)}</div>
+      <div class="terms">${termsHtml(o)}</div>${o.give && o.give.levy ? oathCard(true) : ''}
       ${incoming ? '<div class="seals"><button class="seal gold" data-a="yes">Accept</button><button class="seal red" data-a="no">Refuse</button></div>' : '<div class="seals"><button class="seal gold" data-a="yes">Send<br>Envoy</button><button class="seal red" data-a="no">Tear<br>it up</button></div>'}`,
       { yes: () => { closeModal(); cb(true); }, no: () => { closeModal(); cb(false); } }, { noClose: true });
   }
@@ -475,7 +545,7 @@
       <div class="chips">${[0, 100, 200, 400].map(v => `<button class="chip ${o.give.gold === v ? 'on' : ''}" data-a="gold" data-v="${v}">💰 ${v}</button>`).join('')}</div>
       <div class="chips">${[0, 40, 120].map(v => `<button class="chip ${o.give.supply === v ? 'on' : ''}" data-a="sup" data-v="${v}">📦 ${v}</button>`).join('')}</div>
       <div class="chips">${[-1].concat(lands).map(v => `<button class="chip ${o.give.land === v ? 'on' : ''}" data-a="land" data-v="${v}">⛰ ${v < 0 ? 'No land' : esc(P[v].name)}</button>`).join('')}</div>
-      <div class="chips">${[0, 50].map(v => `<button class="chip ${o.give.levy === v ? 'on' : ''}" data-a="levy" data-v="${v}">⚔ ${v ? (me === HB.INV ? 'Janissary levy ' : 'Levy ') + v : 'No levy'}</button>`).join('')}</div>` : ''}
+      <div class="chips">${[0, 50].map(v => `<button class="chip ${o.give.levy === v ? 'on' : ''}" data-a="levy" data-v="${v}">⚔ ${v ? HB.names().tribute + ' ' + v : 'No ' + HB.names().tribute}</button>`).join('')}</div>` : ''}
       ${o.kind !== 'alliance' && o.kind !== 'coalition' ? `<div class="chips">${[4, 8].map(v => `<button class="chip ${o.truce === v ? 'on' : ''}" data-a="truce" data-v="${v}">🕊 Truce ${v} turns</button>`).join('')}</div>` : ''}
       <div class="terms">${termsHtml(o)}</div>
       <div class="seals"><button class="seal gold" data-a="send">Send<br>Envoy</button><button class="seal red" data-a="close">Tear<br>it up</button></div>`,
@@ -485,12 +555,16 @@
   }
   function armySheet(a) {
     const st = CP.st, F = HB.FACTION[K[a.f].culture], mineA = a.f === CP.cur;
-    const rows = a.picks.map((ix, i) => `<div class="item"><span class="grow">${esc(F.roster[ix].name)} <span class="muted">${esc(HB.TYPES[F.roster[ix].t].role)}</span></span><span class="hp"><b style="width:${a.hp[i]}%"></b></span></div>`).join('');
-    const mv = CP.draft && CP.draft.mv[a.id];
-    sheet(`<h3>${crest(a.f, 22)} ${esc(K[a.f].name)} at ${esc(P[a.p].name)}</h3><div class="muted">Strength ${Math.round(C.strength(st, a))} · ${a.picks.length} regiments${mv != null ? ' · marching to ' + esc(P[mv].name) + (HB.ADJ[a.p].includes(mv) ? '' : ' (' + (C.dist(mv)[a.p]) + ' turns)') : ''}</div>
-      ${mineA ? '<div class="muted">Tap any province to march there — far marches take the roads over several turns.</div>' : ''}<div class="list">${rows}</div>
+    const rows = a.picks.map((ix, i) => { const ro = F.roster[ix], art = ro.art && HB.ART && HB.ART.unit && HB.ART.unit[ro.art]; return `<div class="item">${art ? `<img class="uface" src="${art.face}" alt="">` : ''}<span class="grow">${esc(ro.name)} <span class="muted">${esc(HB.TYPES[ro.t].role)}</span></span><span class="hp"><b style="width:${a.hp[i]}%"></b></span></div>`; }).join('');
+    const hasOath = a.picks.some(ix => F.roster[ix].art === 'oathbound');
+    const mv = CP.draft && CP.draft.mv[a.id], open = !!CP.stripOpen;
+    const counts = {}; for (const ix of a.picks) { const k = HB.TYPES[F.roster[ix].t].role; counts[k] = (counts[k] || 0) + 1; }
+    const sum = Object.entries(counts).map(([k, n]) => n + '× ' + k).join(' · ');
+    sheet(`<div class="striphead" data-a="tog"><h3>${crest(a.f, 22)} ${esc(K[a.f].name)} · ${esc(P[a.p].name)}</h3><button class="tog" data-a="tog" aria-label="${open ? 'Collapse' : 'Expand'}">${open ? '▾' : '▴'} ${a.picks.length}</button></div>
+      <div class="muted">Strength ${Math.round(C.strength(st, a))}${mv != null ? ' · marching to ' + esc(P[mv].name) + (HB.ADJ[a.p].includes(mv) ? '' : ' (ETA turn ' + (st.turn + C.dist(mv)[a.p]) + ')') : ''}${open ? '' : ' · ' + esc(sum)}</div>
+      ${open ? `${hasOath ? oathCard(true) : ''}${mineA ? '<div class="muted">Tap any province to march there — far marches take the roads over several turns.</div>' : ''}<div class="list">${rows}</div>` : ''}
       ${mineA && mv != null ? '<button class="btn sm" data-a="hold">Hold position</button>' : ''}${mineA && C.canRecruit(st, a.f, a.p) ? ' <button class="btn sm gold" data-a="rec">Recruit here</button>' : ''}`,
-      { hold: () => { delete CP.draft.mv[a.id]; refreshArrows(); closeSheet(); }, rec: () => recruitSheet(a.p) });
+      { tog: () => { CP.stripOpen = !CP.stripOpen; armySheet(a); }, hold: () => { delete CP.draft.mv[a.id]; if (CP.eta) delete CP.eta[a.id]; refreshArrows(); armySheet(a); }, rec: () => recruitSheet(a.p) }, { strip: true });
     if (mineA) { MV.sel = a.id; MV.hl = HB.ADJ[a.p].map(p => ({ p })); }
   }
   function recruitSheet(p) {
@@ -511,14 +585,14 @@
       { rec: () => recruitSheet(p), env: () => envoyCompose(o), army: (el) => { const a = st.armies.find(x => x.id === +el.dataset.id); a && armySheet(a); } });
   }
   function marchPath(from, dest) { const out = []; let p = from, g = 0; while (p !== dest && p >= 0 && g++ < 12) { const n = C.pathStep(p, dest); if (n < 0) break; out.push([p, n]); p = n; } return out; }
-  function refreshArrows() { MV.arrows = []; for (const [id, to] of Object.entries(CP.draft ? CP.draft.mv : {})) { const a = CP.st.armies.find(x => x.id === +id); if (!a) continue; marchPath(a.p, to).forEach(([f, t], i) => MV.arrows.push({ from: f, to: t, col: i ? 'rgba(245,207,90,0.75)' : K[CP.cur].color, dest: to })); } }
+  function refreshArrows() { MV.arrows = []; for (const [id, to] of Object.entries(CP.draft ? CP.draft.mv : {})) { const a = CP.st.armies.find(x => x.id === +id); if (!a) continue; const path = marchPath(a.p, to); path.forEach(([f, t], i) => MV.arrows.push({ from: f, to: t, col: i ? 'rgba(245,207,90,0.75)' : K[CP.cur].color, dest: to, label: i === path.length - 1 && path.length > 1 ? 'ETA turn ' + (CP.st.turn + path.length) : '' })); } }
   function mapTap(sx, sy) {
     if (CP.waiting || CP.spectate) { const h = MV.pick(sx, sy); if (h.prov >= 0) provSheet(h.prov); return; }
     const st = CP.st, h = MV.pick(sx, sy);
     const selA = MV.sel != null ? st.armies.find(a => a.id === MV.sel) : null;
     if (selA && h.prov >= 0 && h.prov !== selA.p && C.dist(h.prov)[selA.p] < 99 && !(h.army && h.army.f === CP.cur && h.army.id !== selA.id && h.army.p !== h.prov)) {
       const dest = h.prov, to = HB.ADJ[selA.p].includes(dest) ? dest : C.pathStep(selA.p, dest), own = st.owner[to], hops = C.dist(dest)[selA.p];
-      const doIt = () => { CP.draft.mv[selA.id] = dest; refreshArrows(); closeSheet(); sfx('order'); toast(`March on ${P[dest].name}${hops > 1 ? ' — ' + hops + ' turns, via ' + P[to].name : ''}${(P[dest].cap || P[dest].camp) && st.owner[dest] !== CP.cur ? ' — a siege!' : ''}`); };
+      const doIt = () => { CP.draft.mv[selA.id] = dest; CP.eta = CP.eta || {}; CP.eta[selA.id] = { turn: st.turn + hops }; refreshArrows(); sfx('order'); armySheet(selA); toast(`March on ${P[dest].name}${hops > 1 ? ' — ' + hops + ' turns, via ' + P[to].name + ' (ETA turn ' + (st.turn + hops) + ')' : ''}${(P[dest].cap || P[dest].camp) && st.owner[dest] !== CP.cur ? ' — a siege!' : ''}`); };
       const there = st.armies.filter(a => a.p === to && a.f !== CP.cur).map(a => a.f).concat(own >= 0 && own !== CP.cur ? [own] : []);
       const oath = there.find(f => C.friendly(st, CP.cur, f) && own === f);
       if (oath != null) return modal(`<div class="crests">${crest(oath, 44)}</div><h2>Break your oath?</h2><p>You are bound to ${esc(K[oath].name)} (${relation(CP.cur, oath)}). Marching on ${esc(P[to].name)} is betrayal: the gods will mark you Oathbreaker.</p><button class="btn red" data-a="y">Betray them</button><button class="btn" data-a="close">Keep faith</button>`, { y: () => { closeModal(); doIt(); } });
@@ -546,7 +620,7 @@
   $('bLog').onclick = () => sheet(`<h3>Chronicle</h3><div class="list">${CP.st.log.slice().reverse().slice(0, 40).map(l => `<div class="item"><span class="muted">T${l.t}</span><span class="grow">${l.f >= 0 ? crest(l.f, 18) : ''} ${esc(l.text)}</span></div>`).join('')}</div>`);
   $('bMapMenu').onclick = () => modal(`<h2>The Five Crowns</h2><div class="muted">Turn ${CP.st.turn} of ${CP.st.maxTurns}${CP.online ? ' · room ' + esc(CP.online.code) : ''}</div>
     <button class="btn big" data-a="snd">${HB.Audio && HB.Audio.muted ? 'Sound on' : 'Sound off'}</button><button class="btn big" data-a="how">How to play</button><button class="btn big red" data-a="quit">${CP.online || CP.spectate ? 'Leave' : 'Save & quit'}</button>`,
-    { snd: () => { HB.Audio.setMuted(!HB.Audio.muted); closeModal(); }, how: howTo, quit: () => { save(); if (CP.online) CP.online.close(); CP.online = null; goTitle(); } });
+    { snd: () => { HB.Audio.setMuted(!HB.Audio.muted); syncMute(); closeModal(); toast(HB.Audio.muted ? 'Sound off' : 'Sound on'); }, how: howTo, quit: () => { save(); if (CP.online) CP.online.close(); CP.online = null; goTitle(); } });
   $('bEnd').onclick = () => {
     if (CP.waiting || !CP.draft || CP.cur < 0) return;
     const d = CP.draft, orders = [];
@@ -596,15 +670,18 @@
     if (st.over) return victory();
     const mineLog = st.log.filter(l => l.t === st.turn - 1 && (l.text.includes('BETRAYAL') || l.text.includes('falls') || l.text.includes('captures') || l.text.includes('Siege')));
     if (mineLog.length) toast(mineLog.slice(-1)[0].text, 3200);
+    const paid = st.log.filter(l => l.t === st.turn - 1 && l.text.startsWith(N().tribute + ' paid') && (CP.local.includes(l.f) || CP.local.length === 0));
+    if (paid.length) showCard(`${oathCard(true)}<div class="muted" style="margin-top:4px">${esc(paid[paid.length - 1].text)}</div>`, 6500);
     beginOrders();
   }
   function victory() {
     const st = CP.st, w = st.winner; save(); try { localStorage.removeItem(SAVE); } catch (e) { /* ignore */ }
     const mine = CP.local.includes(w);
     if (CP.local.length) sfx(mine ? 'win' : 'lose');
-    modal(`<div class="crests">${w >= 0 ? crest(w, 70) : ''}</div><h4>Turn ${st.turn}</h4><h2>${w >= 0 ? esc(K[w].name) + ' triumphs' : 'The realm is broken'}</h2>
+    flourish(w >= 0 ? (CP.local.length === 1 ? (mine ? 'Victory' : 'Defeat') : K[w].name) : 'Ruin', w >= 0 ? K[w].name + ' triumphs' : 'The realm is broken', !CP.local.length || mine);
+    setTimeout(() => { $('flourish').classList.remove('on'); modal(`<div class="crests">${w >= 0 ? crest(w, 70) : ''}</div><h4>Turn ${st.turn}</h4><h2>${w >= 0 ? esc(K[w].name) + ' triumphs' : 'The realm is broken'}</h2>
       <p>${w === HB.INV ? 'The Crimson Horde holds three crowns. The dragon banner flies over the realm.' : 'The Horde is broken and the Five Crowns endure.'}</p>
-      <div class="muted">${esc(st.log.slice(-1)[0].text)}</div><button class="btn big gold" data-a="t">To the title</button>`, { t: () => { if (CP.online) CP.online.close(); CP.online = null; goTitle(); } }, { noClose: true });
+      <div class="muted">${esc(st.log.slice(-1)[0].text)}</div><button class="btn big gold" data-a="t">To the title</button>`, { t: () => { if (CP.online) CP.online.close(); CP.online = null; goTitle(); } }, { noClose: true }); }, 900);
   }
 
   // =====================================================================
@@ -619,17 +696,17 @@
     const L = s.lobby || {}, taken = Object.keys(L.seats || {}).map(Number);
     const link = location.origin + location.pathname + '#room=' + s.code;
     const rows = taken.map(i => `<div class="item">${crest(i, 24)}<span class="grow">${esc(K[i].name)}</span><span class="muted">${esc(L.seats[i])}${s.seat === i ? ' (you)' : ''}</span></div>`).join('');
-    const alone = taken.length < 2, canShare = !!navigator.share;
+    const alone = taken.length < 2;
     modal(`<h4>Room code</h4><h2 id="roomCode" style="letter-spacing:.25em;font-size:40px;margin:2px 0">${esc(s.code)}</h2>
       ${s.isHost ? `<div class="muted">${alone ? 'Send this code or link to a friend. It stays here until they join.' : 'A friend has joined.'}</div>
       <div id="roomLink" style="font-size:12px;word-break:break-all;margin:6px 0;padding:6px;border:1px dashed #b89a55;border-radius:6px">${esc(link)}</div>
-      <button class="btn gold" data-a="copy">Copy link</button>${canShare ? '<button class="btn" data-a="share">Share…</button>' : ''}` : '<div class="muted">Joined. Pick your side, then wait for the host.</div>'}
+      <button class="btn gold" data-a="copy">Copy link</button> <button class="btn" data-a="share">Share…</button>` : '<div class="muted">Joined. Pick your side, then wait for the host.</div>'}
       <h4>Rulers</h4><div class="list">${rows || '<div class="muted">Waiting…</div>'}</div>
       ${!s.isHost && s.seat < 0 ? `<h4>Choose your side</h4><div class="seats">${seatButtons([], taken)}</div>` : ''}
       ${s.isHost && alone ? `<h4>Your crown</h4><div class="seats">${seatButtons([s.seat], taken.filter(i => i !== s.seat))}</div>` : ''}
       ${s.isHost ? `<button class="btn big gold" data-a="start" ${taken.length < 2 ? 'disabled' : ''}>Begin the campaign</button>` : '<div class="muted">The host begins the campaign.</div>'}
       <div class="muted" id="netStatus">${esc(s.status || '')}</div><button class="btn sm red" data-a="leave">Leave</button>`,
-      { copy: () => { copyText(link); toast('Room link copied — code ' + s.code); }, share: () => { navigator.share({ title: 'Timeline Brawl', text: 'Join my Five Crowns room: ' + s.code, url: link }).catch(() => {}); }, seat: (el) => s.pickSeat(+el.dataset.i), start: () => s.start(), leave: () => { s.close(); CP.online = null; closeModal(); goTitle(); } }, { noClose: true });
+      { copy: () => { copyText(link); toast('Room link copied — code ' + s.code); }, share: () => { const CF = HB.CONFIG || {}, txt = CF.shareText ? CF.shareText(s.code) : 'Join my room: ' + s.code; const fallback = () => { copyText(link); toast('Sharing is not available here — link copied instead'); }; if (navigator.share) navigator.share({ title: CF.title || document.title, text: txt, url: link }).catch((e) => { if (!e || e.name !== 'AbortError') fallback(); }); else fallback(); }, seat: (el) => s.pickSeat(+el.dataset.i), start: () => s.start(), leave: () => { s.close(); CP.online = null; closeModal(); goTitle(); } }, { noClose: true });
   }
   function wire(s) {
     CP.online = s; CP.reported = {}; CP.netKey = '';
@@ -688,12 +765,20 @@
     if (h.startsWith('#room=')) { const c = h.slice(6).toUpperCase().replace(/[^A-Z0-9]/g, ''); if (c) joinRoom(c); }
   }
   G.addEventListener('hashchange', route);
+  applyConfig();
+  (function boot() { // loading screen: crest art preloads behind it; it never blocks for more than ~0.8s
+    const imgs = [...document.querySelectorAll('#crestRow img')], tips = ['Sharpening pikes…', 'Saddling the Keshig…', 'Mustering the Five Crowns…', 'Sealing treaties…'];
+    $('ldTip').textContent = tips[Math.floor(Math.random() * tips.length)];
+    let done = false; let fin = () => { if (done) return; done = true; $('ldFill').style.width = '100%'; setTimeout(() => $('loading').classList.remove('on'), 180); };
+    const tick = () => { const n = imgs.filter(i => i.complete).length; $('ldFill').style.width = Math.round(20 + 80 * n / Math.max(1, imgs.length)) + '%'; if (n >= imgs.length) fin(); };
+    const t0 = Date.now(); imgs.forEach(i => i.addEventListener('load', tick)); const fin0 = fin; fin = () => setTimeout(fin0, Math.max(0, 420 - (Date.now() - t0))); tick(); setTimeout(fin0, 700);
+  })();
   route();
   document.addEventListener('visibilitychange', () => { last = performance.now(); });
-  HB.UI = { startBattle, startCampaign, quickBattle, spectateBattle, show, toast };
+  HB.UI = { startBattle, startCampaign, quickBattle, spectateBattle, show, toast, pikesVsCharge };
   G.__tb = {
     HB, BR, CP, R, MV,
-    quick: quickBattle, spectate: spectateBattle, campaign: (humans, seed) => startCampaign({ humans, seed }), host: hostRoom, join: joinRoom,
+    quick: quickBattle, spectate: spectateBattle, preset: pikesVsCharge, loadSaved, SAVE, SAVE_V, campaign: (humans, seed) => startCampaign({ humans, seed }), host: hostRoom, join: joinRoom,
     // advance the running battle by `sec` simulated seconds (tests)
     start() { startFight(); BR.introT = 0; },
     ff(sec) { if (BR.deploy) startFight(); BR.introT = 0; const b = BR.b; if (!b || BR.lock) return; let n = Math.round(sec / W.DT); while (n-- > 0 && !b.over) b.step(); },

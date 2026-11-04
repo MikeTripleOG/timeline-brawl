@@ -13,7 +13,18 @@
       const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy); return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy; };
   }
   // ----- crests (shared with the DOM: treaty scroll, HUD) -----
+  // painted crest art (assets/art, listed in js/art.js); falls back to the vector placeholder until it has loaded
+  const artImg = {};
+  function artCrest(kid) {
+    const src = HB.ART && HB.ART.crest && HB.ART.crest[kid]; if (!src) return null;
+    let im = artImg[kid]; if (!im) { im = artImg[kid] = new Image(); im.decoding = 'async'; im.src = src; }
+    return im.complete && im.naturalWidth ? im : null;
+  }
+  HB.artCrest = artCrest; HB.artCrestSrc = (kid) => (HB.ART && HB.ART.crest && HB.ART.crest[kid]) || null;
+  if (typeof document !== 'undefined') for (const k of (HB.KINGDOMS || [])) artCrest(k.id);
   function drawCrest(g, id, x, y, s, col) {
+    if (s >= 12) { const KK = (HB.KINGDOMS || []).find(k => k.crest === id), im = KK && artCrest(KK.id);
+      if (im) { const h = s * 1.45, w = h * im.naturalWidth / im.naturalHeight; g.save(); g.shadowColor = 'rgba(0,0,0,0.45)'; g.shadowBlur = 3; g.shadowOffsetY = 1.5; g.drawImage(im, x - w / 2, y - h / 2, w, h); g.restore(); return; } }
     g.save(); g.translate(x, y); g.scale(s / 20, s / 20);
     // shield
     g.fillStyle = col; g.strokeStyle = '#e8c76a'; g.lineWidth = 1.6;
@@ -30,13 +41,14 @@
   HB.drawCrest = drawCrest;
   HB.crestURL = (k, size) => { const c = document.createElement('canvas'); c.width = c.height = size * 2; const g = c.getContext('2d'); drawCrest(g, k.crest, size, size, size * 1.7, k.color); return c.toDataURL(); };
 
+  const coastX = (n, y) => 70 + n(y / 90, 3.3) * 70 + (y > 620 ? (y - 620) * 0.45 : 0); // the coast is a smooth curve x(y)
   function landAt(n, x, y) { // irregular coast: sea down the west edge and in the south-west corner
-    const coast = 70 + n(y / 90, 3.3) * 70 + (y > 620 ? (y - 620) * 0.45 : 0);
-    return x > coast && x < MW - 6 && y > 6 && y < MH - 6;
+    return x > coastX(n, y) && x < MW - 6 && y > 6 && y < MH - 6;
   }
+  function coastPath(g, n, off) { g.beginPath(); g.moveTo(-10, -10); for (let y = -10; y <= MH + 10; y += 4) g.lineTo(coastX(n, y) + (off || 0), y); g.lineTo(-10, MH + 10); g.closePath(); }
 
   class MapView {
-    constructor(canvas) { this.cv = canvas; this.g = canvas.getContext('2d', { alpha: false }); this.cam = { x: MW / 2, y: MH / 2, z: 1 }; this.sel = null; this.t = 0; this.hl = []; this.arrows = []; this.anim = []; }
+    constructor(canvas) { this.cv = canvas; this.g = canvas.getContext('2d', { alpha: false }); this.cam = { x: MW / 2, y: MH / 2, z: 1 }; this.sel = null; this.t = 0; this.hl = []; this.arrows = []; this.anim = []; this.warn = []; this.dust = []; this.moveA = {}; }
     resize() {
       const dpr = Math.min(2, G.devicePixelRatio || 1); this.dpr = dpr; const w = this.cv.clientWidth || G.innerWidth, h = this.cv.clientHeight || G.innerHeight;
       this.cv.width = Math.round(w * dpr); this.cv.height = Math.round(h * dpr); this.vw = w; this.vh = h;
@@ -48,6 +60,11 @@
     toWorld(sx, sy) { const c = this.cam; return { x: (sx - this.vw / 2) / c.z + c.x, y: (sy - this.vh / 2) / c.z + c.y }; }
     toScreen(x, y) { const c = this.cam; return { x: (x - c.x) * c.z + this.vw / 2, y: (y - c.y) * c.z + this.vh / 2 }; }
     setState(st, me) {
+      // armies that changed province since the last state slide along the road instead of teleporting
+      if (this.st && this.st.seed !== st.seed) { this.pos = null; this.moveA = {}; }
+      const pos = this.pos || {}, now = {}; this.moveA = this.moveA || {};
+      for (const a of st.armies) { now[a.id] = a.p; if (pos[a.id] != null && pos[a.id] !== a.p && this.st) this.moveA[a.id] = { from: pos[a.id], t0: this.t }; }
+      this.pos = now;
       this.st = st; this.me = me;
       if (!this.base) this.paintBase(st.seed);
       const key = st.owner.join(',');
@@ -68,8 +85,11 @@
       g.fillStyle = '#d9c39a'; g.fillRect(0, 0, MW, MH);
       for (let i = 0; i < 900; i++) { const x = rnd() * MW, y = rnd() * MH, r = 10 + rnd() * 70; g.fillStyle = ['rgba(150,110,60,0.06)', 'rgba(240,225,190,0.08)', 'rgba(120,85,45,0.05)'][i % 3]; g.beginPath(); g.ellipse(x, y, r, r * (0.5 + rnd() * 0.5), rnd() * 3, 0, TAU); g.fill(); }
       for (let i = 0; i < 5000; i++) { g.fillStyle = rnd() < 0.5 ? 'rgba(90,60,30,0.10)' : 'rgba(255,245,220,0.12)'; g.fillRect(rnd() * MW, rnd() * MH, 1 + rnd() * 3, 1); }
-      // sea with hatched ripples
-      for (let gy = 0; gy < GY; gy++) for (let gx = 0; gx < GX; gx++) if (this.cellProv[gy * GX + gx] < 0) { g.fillStyle = 'rgba(70,110,130,0.55)'; g.fillRect(gx * CELL, gy * CELL, CELL, CELL); }
+      // sea: one smooth coastline (no stair-steps), shallows, and inked shore lines that echo the coast
+      this.noiseCoast = n;
+      g.fillStyle = 'rgba(70,110,130,0.55)'; coastPath(g, n); g.fill();
+      g.save(); coastPath(g, n); g.clip(); for (const [o, a] of [[-6, 0.10], [-14, 0.07], [-24, 0.05]]) { g.strokeStyle = 'rgba(230,240,240,' + a * 3 + ')'; g.lineWidth = 1.2; g.beginPath(); for (let y = 0; y <= MH; y += 4) { const x = coastX(n, y) + o; if (y) g.lineTo(x, y); else g.moveTo(x, y); } g.stroke(); } g.restore();
+      g.strokeStyle = 'rgba(50,35,20,0.75)'; g.lineWidth = 2.2; g.beginPath(); for (let y = 0; y <= MH; y += 4) { const x = coastX(n, y); if (y) g.lineTo(x, y); else g.moveTo(x, y); } g.stroke();
       g.strokeStyle = 'rgba(230,240,240,0.35)'; g.lineWidth = 1;
       for (let i = 0; i < 160; i++) { const x = rnd() * MW, y = rnd() * MH; const ci = this.cellProv[Math.floor(y / CELL) * GX + Math.floor(x / CELL)]; if (ci >= 0) continue; g.beginPath(); g.moveTo(x, y); g.quadraticCurveTo(x + 5, y - 3, x + 10, y); g.stroke(); }
       this.base = c;
@@ -162,13 +182,13 @@
         const r = gx + 1 < GX ? this.cellProv[gy * GX + gx + 1] : -1, d = gy + 1 < GY ? this.cellProv[(gy + 1) * GX + gx] : -1;
         if (r !== p && r >= 0) { const kb = own(r) !== own(p); g.fillStyle = kb ? 'rgba(60,35,15,0.75)' : 'rgba(80,55,30,0.35)'; g.fillRect((gx + 1) * CELL - (kb ? 1.2 : 0.6), gy * CELL, kb ? 2.4 : 1.2, CELL); }
         if (d !== p && d >= 0) { const kb = own(d) !== own(p); g.fillStyle = kb ? 'rgba(60,35,15,0.75)' : 'rgba(80,55,30,0.35)'; g.fillRect(gx * CELL, (gy + 1) * CELL - (kb ? 1.2 : 0.6), CELL, kb ? 2.4 : 1.2); }
-        if (r < 0 && gx + 1 < GX || d < 0 && gy + 1 < GY) { g.fillStyle = 'rgba(50,35,20,0.6)'; if (r < 0) g.fillRect((gx + 1) * CELL - 1, gy * CELL, 2, CELL); if (d < 0) g.fillRect(gx * CELL, (gy + 1) * CELL - 1, CELL, 2); }
       }
       // blur slightly for the painted look
       const b = this.regB || document.createElement('canvas'); b.width = MW; b.height = MH; const bg = b.getContext('2d'); bg.clearRect(0, 0, MW, MH);
       bg.drawImage(tint, 0, 0);
       try { bg.filter = 'blur(2.5px)'; } catch (e) { /* older browsers */ }
       bg.drawImage(c, 0, 0); bg.drawImage(c, 0, 0); bg.filter = 'none';
+      if (this.noiseCoast) { bg.globalCompositeOperation = 'destination-out'; coastPath(bg, this.noiseCoast); bg.fill(); bg.globalCompositeOperation = 'source-over'; } // keep the tint off the sea
       this.reg = c; this.regB = b;
     }
     draw(dt) {
@@ -190,8 +210,12 @@
         // supply wagons along the line
         for (let i = 0; i < pts.length - 1; i++) { const u = (this.t * 0.06 + i * 0.37) % 1, x = pts[i][0] + (pts[i + 1][0] - pts[i][0]) * u, y = pts[i][1] + 18 + (pts[i + 1][1] - pts[i][1]) * u; this.wagon(g, x, y, pts[i + 1][0] < pts[i][0] ? -1 : 1); }
       }
-      // order arrows
-      for (const a of this.arrows) this.arrow(g, P[a.from], P[a.to], a.col || '#f5cf5a');
+      // order arrows (with an ETA tag on the last leg)
+      for (const a of this.arrows) { this.arrow(g, P[a.from], P[a.to], a.col || '#f5cf5a'); if (a.label) { const B = P[a.to]; g.font = '700 13px ' + FONT; g.textAlign = 'center'; g.textBaseline = 'middle'; const w = g.measureText(a.label).width + 12; g.fillStyle = 'rgba(30,18,6,0.85)'; g.fillRect(B.x - w / 2, B.y - 52, w, 18); g.fillStyle = '#f5cf5a'; g.fillText(a.label, B.x, B.y - 43); } }
+      // the Horde is coming: threatened provinces pulse red
+      for (const w of (this.warn || [])) { const p = P[w.p], k = 0.5 + 0.5 * Math.sin(this.t * 5); g.strokeStyle = 'rgba(190,25,20,' + (0.5 + 0.4 * k) + ')'; g.lineWidth = 4; g.beginPath(); g.arc(p.x, p.y, 50 + k * 6, 0, TAU); g.stroke(); g.font = '700 15px ' + FONT; g.textAlign = 'center'; g.fillStyle = '#9a1410'; g.fillText('⚠ Horde ' + (w.eta <= 1 ? 'next turn' : 'in ' + w.eta + ' turns'), p.x, p.y + 52); }
+      // supply running low: the camp's line flickers and a warning hangs over the camp
+      if (this.me === INV && st.supply[INV] < 30) { const cp = P[HB.CAMP], k = 0.5 + 0.5 * Math.sin(this.t * 6); g.font = '700 16px ' + FONT; g.textAlign = 'center'; g.lineWidth = 3; g.strokeStyle = 'rgba(240,225,190,0.9)'; g.strokeText('SUPPLY LOW', cp.x, cp.y + 58); g.fillStyle = 'rgba(160,20,15,' + (0.6 + 0.4 * k) + ')'; g.fillText('SUPPLY LOW', cp.x, cp.y + 58); }
       // name plates over each kingdom's capital (current owner's crest)
       this.plates = []; for (let k = 0; k < 5; k++) { const capP = P.findIndex(p => p.k === k && p.cap); this.plates.push({ p: capP, x: P[capP].x, y: P[capP].y - 62, w: K[k].name.length * 12 + 70 }); this.plate(g, P[capP].x, P[capP].y - 62, K[k].name, K[k], st.owner[capP] !== k ? st.owner[capP] : -1); }
       // province labels
@@ -199,9 +223,16 @@
       P.forEach((p, i) => { if (p.cap && p.k < 5) return; g.font = '600 13px ' + FONT; g.lineWidth = 3; g.strokeStyle = 'rgba(240,225,190,0.85)'; g.strokeText(p.name, p.x, p.y + 30); g.fillStyle = '#3a2410'; g.fillText(p.name, p.x, p.y + 30); });
       // armies
       const byP = {}; for (const a of st.armies) (byP[a.p] = byP[a.p] || []).push(a);
-      for (const p in byP) byP[p].forEach((a, j) => this.army(g, a, P[a.p].x + (j - (byP[p].length - 1) / 2) * 40, P[a.p].y - 4, this.sel === a.id));
+      for (const p in byP) byP[p].forEach((a, j) => {
+        let x = P[a.p].x + (j - (byP[p].length - 1) / 2) * 40, y = P[a.p].y - 4; const m = this.moveA && this.moveA[a.id];
+        if (m) { const u = Math.min(1, (this.t - m.t0) / 1.4), e = u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2, F = P[m.from]; if (u >= 1) delete this.moveA[a.id]; else { x = F.x + (x - F.x) * e; y = F.y - 4 + (y - F.y + 4) * e + Math.sin(u * Math.PI) * -6; if (Math.random() < 0.5) this.dust.push({ x: x + (Math.random() - 0.5) * 16, y: y + 12, t: this.t }); } }
+        this.army(g, a, x, y, this.sel === a.id);
+      });
+      this.dust = (this.dust || []).filter(d => this.t - d.t < 0.9); for (const d of this.dust) { const u = (this.t - d.t) / 0.9; g.globalAlpha = 0.35 * (1 - u); g.fillStyle = '#a88a5a'; g.beginPath(); g.arc(d.x, d.y, 3 + u * 6, 0, TAU); g.fill(); } g.globalAlpha = 1;
       // envoys riding the roads
-      for (const e of (this.envoys || [])) { const u = Math.min(1, (this.t - e.t0) / 3), A = P[e.a], B = P[e.b]; if (u >= 1) continue; this.rider(g, A.x + (B.x - A.x) * u, A.y + (B.y - A.y) * u + 10, K[e.f].color, B.x < A.x ? -1 : 1); }
+      for (const e of (this.envoys || [])) { const u0 = Math.min(1, (this.t - e.t0) / 3.2), A = P[e.a], B = P[e.b]; if (u0 >= 1) continue; const u = u0 < 0.5 ? 2 * u0 * u0 : 1 - Math.pow(-2 * u0 + 2, 2) / 2, hop = Math.abs(Math.sin(this.t * 14)) * 1.6;
+        g.strokeStyle = 'rgba(80,50,20,0.45)'; g.lineWidth = 1.5; g.setLineDash([2, 4]); g.beginPath(); g.moveTo(A.x, A.y + 14); g.lineTo(A.x + (B.x - A.x) * u, A.y + (B.y - A.y) * u + 14); g.stroke(); g.setLineDash([]);
+        this.rider(g, A.x + (B.x - A.x) * u, A.y + (B.y - A.y) * u + 10 - hop, K[e.f].color, B.x < A.x ? -1 : 1); }
       // battle markers from the last turn
       for (const bt of (this.marks || [])) { const p = P[bt.p], k = Math.max(0, 1 - (this.t - bt.t0) / 6); if (k <= 0) continue; g.globalAlpha = k; g.font = '700 22px ' + FONT; g.fillStyle = '#7a1010'; g.fillText('⚔', p.x + 30, p.y - 30); g.globalAlpha = 1; }
       g.drawImage(this.frame, 0, 0);
@@ -214,7 +245,7 @@
       g.strokeStyle = '#e2bf5a'; g.lineWidth = 2; g.strokeRect(x - w / 2 + 1, y - h / 2 + 1, w - 2, h - 2);
       // swallow-tail ends
       g.fillStyle = k.color; for (const s of [-1, 1]) { g.beginPath(); g.moveTo(x + s * w / 2, y - h / 2 + 4); g.lineTo(x + s * (w / 2 + 12), y - h / 2 + 4); g.lineTo(x + s * (w / 2 + 6), y + 2); g.lineTo(x + s * (w / 2 + 12), y + h / 2 - 2); g.lineTo(x + s * w / 2, y + h / 2 - 2); g.fill(); }
-      drawCrest(g, k.crest, x - w / 2 + 16, y, 20, shadeHex(k.color));
+      drawCrest(g, k.crest, x - w / 2 + 16, y, 26, shadeHex(k.color));
       g.fillStyle = '#f6e7b8'; g.textAlign = 'left'; g.textBaseline = 'middle'; g.fillText(text.toUpperCase(), x - w / 2 + 31, y + 1);
       if (capturedBy >= 0) { const K2 = HB.KINGDOMS[capturedBy]; g.font = '600 11px ' + FONT; g.fillStyle = K2.color; g.textAlign = 'center'; g.fillText('held by ' + K2.name, x, y + 22); }
       g.restore();
@@ -232,7 +263,7 @@
       g.fillStyle = '#3a2410'; g.fillRect(-1, -26 * big, 2, 30 * big);
       g.fillStyle = K.color; g.beginPath(); g.moveTo(1, -26 * big); g.lineTo(18 * big, -24 * big + wav); g.lineTo(13 * big, -18 * big); g.lineTo(18 * big, -11 * big + wav); g.lineTo(1, -12 * big); g.closePath(); g.fill();
       g.strokeStyle = '#e2bf5a'; g.lineWidth = 1; g.stroke();
-      drawCrest(g, K.crest, 9 * big, -18.5 * big, 9 * big, K.color);
+      drawCrest(g, K.crest, 9 * big, -18.5 * big, 12 * big, K.color); // painted crest art (>= 12px), the Horde's dragon shield included
       // strength pip
       g.font = '700 10px ' + FONT; g.textAlign = 'center'; g.fillStyle = '#1e1208'; g.fillRect(-9, 15, 18, 11); g.fillStyle = '#f3dc95'; g.fillText(String(n), 0, 21);
       g.restore();

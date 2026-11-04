@@ -24,13 +24,17 @@ let pass = 0, fail = 0; const ok = (c, m) => { if (c) { pass++; console.log('  â
   ok(await ev(() => __tb.screen()) === 'battle', 'one tap starts a battle');
   // deploy phase: frozen clock, camera framed close on my army, Start button
   ok(await ev(() => __tb.BR.deploy) && await pg.isVisible('#bStart'), 'battle opens in a DEPLOY phase with a Start button');
+  ok(await pg.isVisible('#tut.on') && /Tip 1 of [34]/.test(await pg.textContent('#tutN')), 'first battle shows a short first-time tutorial (' + (await pg.textContent('#tutN')) + ')');
+  await pg.click('#tutNext'); ok(/Tip 2 of/.test(await pg.textContent('#tutN')), 'Next steps through the tips');
+  await pg.click('#tutSkip'); await pg.waitForTimeout(100);
+  ok(!(await pg.isVisible('#tut.on')) && await ev(() => localStorage.getItem('tb.tips.off')) === '1', 'Skip hides the tutorial and remembers it');
   const z0 = await ev(() => ({ z: __tb.R.cam.z, fit: __tb.R.fitZ() }));
   ok(z0.z >= z0.fit * 1.5, 'camera starts close on my army (zoom ' + (z0.z / z0.fit).toFixed(2) + 'Ã— the full-field view)');
   await pg.waitForTimeout(1500);
   ok(await ev(() => __tb.BR.b.t) === 0, 'the clock and the enemy stay still while deploying');
   const icons = await ev(() => [...new Set(__tb.BR.b.regs.map(r => __tb.HB.iconOf(r)))]);
   ok(icons.length >= 3 && icons.every(k => ['pike', 'sword', 'bow', 'hbow', 'horse', 'chariot', 'ele', 'siege'].includes(k)), 'every block carries a unit-type icon (' + icons.join(', ') + ')');
-  const r0 = await ev(() => { const b = __tb.BR.b, r = b.regs.find(r => r.side === 0 && r.def.cls === 'inf'); const p = __tb.R.toScreen(r.x, r.y); return { id: r.id, x: p.x, y: p.y, wx: r.x, wy: r.y }; });
+  const r0 = await ev(() => { const b = __tb.BR.b, R = __tb.R, d = (r) => { const p = R.toScreen(r.x, r.y); return Math.abs(p.x - innerWidth / 2) + Math.abs(p.y - innerHeight * 0.6); }, r = b.regs.filter(r => r.side === 0 && r.def.cls === 'inf').sort((x, y) => d(x) - d(y))[0]; const p = __tb.R.toScreen(r.x, r.y); return { id: r.id, x: p.x, y: p.y, wx: r.x, wy: r.y }; });
   await tapAt(r0.x, r0.y);
   ok(await ev(() => __tb.BR.sel) === r0.id && !(await ev(() => __tb.R.ringOpen)), 'first tap selects a regiment (no ring yet)');
   await tapAt(r0.x, r0.y); await pg.waitForTimeout(100);
@@ -106,6 +110,14 @@ let pass = 0, fail = 0; const ok = (c, m) => { if (c) { pass++; console.log('  â
   const a = await ev(() => { const st = __tb.CP.st, a = st.armies.find(x => x.f === 1 && x.p === 3); __tb.MV.center(3); const P = __tb.HB.PROVS; const p = __tb.MV.toScreen(P[3].x, P[3].y - 10); return { id: a.id, x: p.x, y: p.y }; });
   await tapAt(a.x, a.y);
   ok(await ev(() => __tb.MV.sel) === a.id && await pg.isVisible('#sheet.on'), 'tap my army: army sheet + highlighted roads');
+  const strip = await ev(() => { const r = (id) => document.getElementById(id).getBoundingClientRect(), s = document.getElementById('sheet').getBoundingClientRect(), hit = (q) => !(q.right <= s.left || q.left >= s.right || q.bottom <= s.top || q.top >= s.bottom);
+    const top = (id) => { const q = r(id); const e = document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2); return e && (e.id === id || e.closest('#' + id)); };
+    return { cls: document.getElementById('sheet').className, h: Math.round(s.height), clear: !hit(r('bEnd')) && !hit(r('bDiplo')) && !!top('bEnd') && !!top('bDiplo') }; });
+  ok(/strip/.test(strip.cls) && strip.h <= 110 && strip.clear, 'army panel is a slim strip (' + strip.h + 'px) that never covers End Turn or Envoys');
+  await pg.click('#sheet [data-a=tog]'); await pg.waitForTimeout(100);
+  const op = await ev(() => ({ open: document.getElementById('sheet').classList.contains('open'), sel: __tb.MV.sel }));
+  await pg.click('#sheet [data-a=tog]'); await pg.waitForTimeout(100);
+  ok(op.open && op.sel === a.id && await ev(() => __tb.MV.sel) === a.id && !(await ev(() => document.getElementById('sheet').classList.contains('open'))), 'the strip expands on demand and collapsing keeps the army selected');
   const dest = await ev(() => { const P = __tb.HB.PROVS; const p = __tb.MV.toScreen(P[1].x, P[1].y + 15); return p; });
   await tapAt(dest.x, dest.y);
   ok(await ev(() => __tb.MV.arrows.length) === 1, 'tap a neighbouring province: march arrow');
@@ -115,6 +127,7 @@ let pass = 0, fail = 0; const ok = (c, m) => { if (c) { pass++; console.log('  â
   await tapAt(vp.x, vp.y); await pg.waitForTimeout(150);
   const vd = await ev((id) => ({ d: __tb.CP.draft.mv[id], n: __tb.MV.arrows.length }), a.id);
   ok(vd.d === 6 && vd.n === 3, 'tap the Vellorien plate: march on Vellorien itself, drawn over ' + vd.n + ' hops (dest ' + vd.d + ')');
+  ok(await ev(() => /^ETA turn \d+$/.test(__tb.MV.arrows[__tb.MV.arrows.length - 1].label || '')), 'a far march shows its ETA on the map');
   await pg.screenshot({ path: SHOTS + '/e2e-map.png' });
   // envoy: compose a tribute treaty
   await pg.click('#bDiplo'); await pg.click('[data-a=env][data-i="0"]'); await pg.waitForTimeout(200);
@@ -167,6 +180,31 @@ let pass = 0, fail = 0; const ok = (c, m) => { if (c) { pass++; console.log('  â
   ok(await pg.isVisible('#cover.on'), 'hot-seat cover screen asks to pass the device');
   await pg.click('#coverGo'); await pg.click('#bEnd'); await pg.waitForTimeout(300);
   ok(await pg.isVisible('#cover.on') && /Crimson Horde/.test(await pg.textContent('#cover')), 'then passes to the second ruler');
+
+  console.log('polish: title config, crests, sound, saves, presets');
+  await pg.goto(BASE); await pg.waitForTimeout(900);
+  const tc = await ev(() => ({ cfg: __tb.HB.CONFIG.title, logo: document.getElementById('logoTxt').textContent, title: document.title, loading: document.getElementById('loading').classList.contains('on'), crests: [...document.querySelectorAll('#crestRow img')].map(i => i.complete && i.naturalWidth > 0) }));
+  ok(tc.logo === tc.cfg && tc.title.startsWith(tc.cfg) && !tc.loading, 'title text comes from HB.CONFIG and the loading screen clears (' + tc.cfg + ')');
+  ok(tc.crests.length === 6 && tc.crests.every(Boolean), 'all six crest images load on the title (' + tc.crests.filter(Boolean).length + '/6)');
+  const m0 = await ev(() => __tb.HB.Audio.muted);
+  await pg.click('#bMute'); await pg.goto(BASE); await pg.waitForTimeout(900);
+  const m1 = await ev(() => ({ m: __tb.HB.Audio.muted, t: document.getElementById('bMute').textContent }));
+  ok(m1.m === !m0 && m1.t === (m1.m ? 'ðŸ”‡' : 'ðŸ”Š'), 'the mute toggle works and is remembered across reloads');
+  await pg.click('#bMute');
+  await ev(() => { localStorage.setItem('tb-campaign', JSON.stringify({ v: 1, st: { v: 3, turn: 5 } })); localStorage.setItem('tb3-campaign', '{"st":{"v":3}}'); });
+  await pg.click('#bPlay'); await pg.waitForTimeout(150);
+  ok(!(await pg.isVisible('[data-a=cont]')) && await ev(() => localStorage.getItem('tb-campaign') === null && localStorage.getItem('tb3-campaign') === null), 'an incompatible save is dropped and Continue is hidden');
+  await ev(() => document.querySelector('#modal [data-a=close]') ? document.querySelector('#modal [data-a=close]').click() : __tb.closeModal && __tb.closeModal());
+  await pg.goto(BASE); await pg.waitForTimeout(900);
+  await pg.click('#bPreset'); await pg.waitForTimeout(400);
+  const pv = await ev(() => { const b = __tb.BR.b; return { scr: __tb.screen(), mine: b.regs.filter(r => r.side === 0).map(r => r.name), foe: b.regs.filter(r => r.side === 1).map(r => r.name) }; });
+  ok(pv.scr === 'battle' && pv.mine.filter(n => n === 'Phalangites').length >= 4 && pv.foe.filter(n => n === 'Keshig lancers').length >= 4, 'Pikes vs Charge preset: ' + pv.mine.length + ' Macedonian blocks vs ' + pv.foe.length + ' Mongol blocks');
+  await ev(() => __tb.ff(0.1));
+  await ev(() => { const b = __tb.BR.b, em = b.emit.bind(b); window.__evs = []; b.emit = (e) => { window.__evs.push(e.k === 'callout' ? 'callout:' + e.text : e.k + (e.braced ? ':braced' : '')); return em(e); }; });
+  await ev(() => __tb.ff(70)); await pg.waitForTimeout(500);
+  const bev = await ev(() => ({ braced: window.__evs.filter(k => k === 'impact:braced' || k === 'callout:BRACED!').length, brA: __tb.BR.b.regs.some(r => (r._brA || 0) > 0.3) || window.__evs.includes('impact:braced') }));
+  ok(bev.braced > 0, 'the lancers hit a braced pike line (' + bev.braced + ' BRACED events)');
+  await pg.screenshot({ path: SHOTS + '/e2e-pikes.png' });
 
   ok(errs.length === 0, 'no console errors' + (errs.length ? ': ' + errs.slice(0, 3).join(' | ') : ''));
   console.log(`\n${pass} passed, ${fail} failed`);

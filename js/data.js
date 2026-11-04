@@ -91,6 +91,8 @@
   // every culture can build a siege train (only used when assaulting a walled city)
   HB.SIEGE_TRAIN = ['ram', 'stower', 'trebuchet'];
   for (const f of HB.FACTIONS) { f.siege0 = f.roster.length; f.roster.push({ t: 'ram', name: 'Battering ram', siege: 1 }, { t: 'stower', name: 'Siege tower', siege: 1 }, { t: 'trebuchet', name: 'Trebuchet', siege: 1 }); }
+  // the Horde's tribute recruits: never drafted or bought, only raised by the Blood Tribute (name from HB.CONFIG.recruits)
+  { const F = HB.FACTIONS.find(f => f.id === 'mongols'); F.oath0 = F.roster.length; F.roster.push({ t: 'legion', name: (HB.CONFIG && HB.CONFIG.recruits) || 'Oathbound', tribute: 1, art: 'oathbound', m: { mor: 0.95 } }); }
   HB.FACTION = {}; for (const f of HB.FACTIONS) HB.FACTION[f.id] = f;
   HB.SIDE_COLORS = ['#e0453a', '#3f7fe0', '#e8b22e', '#2fae6a', '#efe2c0'];
   HB.SIDE_NAMES = ['Red', 'Blue', 'Gold', 'Green'];

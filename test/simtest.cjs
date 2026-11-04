@@ -1,6 +1,6 @@
 // Timeline Brawl v3 — headless sim tests: node test/simtest.cjs
 const path = require('path');
-for (const f of ['data', 'sim', 'siege', 'ai', 'match', 'campaign']) require(path.join(__dirname, '..', 'js', f + '.js'));
+for (const f of ['config', 'data', 'sim', 'siege', 'ai', 'match', 'campaign']) require(path.join(__dirname, '..', 'js', f + '.js'));
 const HB = globalThis.HB;
 const UP = -90, DOWN = 90; // degrees; y grows downwards
 let fails = 0; const results = [];
@@ -232,6 +232,26 @@ function arrowTest(form) {
   }
   lines.push(`${games} full AI campaigns: the gods walked ${n} time(s) in ${withW} campaign(s), earliest on turn ${first === 99 ? '—' : first} (never before turn 7, at most twice a war)`);
   check('Gods\' Wrath is gated: rare, late, earned by campaign bloodshed', ok, lines.join('; '));
+}
+// ---------- polish pass: names, upkeep, Horde pacing, all-AI balance ----------
+{
+  const fs = require('fs'), path = require('path'), root = path.join(__dirname, '..');
+  const files = []; const walk = (d) => { for (const f of fs.readdirSync(d)) { if (f === '.git' || f === 'node_modules' || f === 'assets') continue; const q = path.join(d, f); if (fs.statSync(q).isDirectory()) walk(q); else if (/\.(js|cjs|html|css|md|json|py)$/.test(f)) files.push(q); } }; walk(root);
+  const bad = new RegExp(['Jan' + 'issar', 'Sworn ' + 'Blade'].join('|'), 'i'), hits = files.filter(f => bad.test(fs.readFileSync(f, 'utf8'))).map(f => path.relative(root, f));
+  check('final names only: no retired levy/recruit names anywhere in the game', hits.length === 0 && HB.CONFIG.tribute === 'Blood Tribute' && HB.CONFIG.recruits === 'Oathbound', hits.length ? 'found in ' + hits.join(', ') : `${files.length} files clean; levy "${HB.CONFIG.tribute}", recruits "${HB.CONFIG.recruits}" from HB.CONFIG`);
+  const F = HB.FACTION.mongols, ro = F.roster[F.oath0];
+  check('the Oathbound are a Horde roster entry with art and the config name', !!ro && ro.name === HB.CONFIG.recruits && ro.art === 'oathbound' && ro.tribute === 1, ro ? `${ro.name} (${ro.t}), art slot "${ro.art}"` : 'missing');
+  const C = HB.Campaign, INV = HB.INV; let H = 0, Kw = 0, early = 0, upk = 0, games = 0; const goldT4 = [];
+  for (let seed = 1; seed <= 10; seed++) {
+    const st = C.create({ seed, seats: HB.KINGDOMS.map(() => ({ cmd: 'ai' })) }); let g = 0; games++;
+    while (!st.over && g++ < 400) {
+      if (st.phase === 'orders') { if (st.turn < 5 && HB.PROVS.some((p, i) => p.cap && st.owner[i] === INV)) early++; if (st.turn === 5) goldT4.push(st.gold[INV]); if (st.pay && st.pay[INV] > 0) upk++; C.resolve(st); }
+      if (st.phase === 'battles') for (const bt of st.battles.filter(b => !b.done)) C.finishBattle(st, bt, C.autoResolve(st, bt));
+    }
+    if (st.winner === INV) H++; else if (st.winner >= 0) Kw++;
+  }
+  check('gold upkeep is charged and the Horde cannot take a capital before its siege turn', !!C.UPKEEP && upk > 0 && early === 0, `upkeep ${JSON.stringify(C.UPKEEP)}; Horde gold at turn 5: ${goldT4.map(Math.round).join(',')}; capitals lost before turn 5: ${early}`);
+  check('all-AI campaigns stay near 50/50 (Horde vs kingdoms)', H >= 2 && Kw >= 2, `${games} games: Horde ${H}, kingdoms ${Kw}`);
 }
 console.log(results.join('\n'));
 console.log(fails ? fails + ' FAILED' : 'ALL PASS');

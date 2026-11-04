@@ -12,6 +12,7 @@
     { id: 'invader', ruler: 'The Crimson Warlord', name: 'The Crimson Horde', culture: 'mongols', color: '#8e1020', tint: '#6e1022', crest: 'dragon', motto: 'Everything under the sky', invader: true },
   ];
   const INV = 5;
+  HB.names = () => HB.CONFIG; // js/config.js holds every display name (game title, the tribute and its recruits)
   // p: owner kingdom (-1 neutral); cap: capital (walled city -> sieges); x,y on a 1600x900 map
   const PROVS = [
     { name: 'Elden Keep', k: 0, cap: 1, x: 250, y: 600 }, { name: 'Thornwood', k: 0, x: 215, y: 340 },
@@ -26,6 +27,9 @@
   const ADJ = PROVS.map(() => []); for (const [a, b] of ROADS) { ADJ[a].push(b); ADJ[b].push(a); }
   const CAMP = 13;
   const INCOME = (p) => p.cap ? 50 : p.camp ? 25 : 22; // slower gold: armies are dear
+  const TUMEN_EVERY = 2; // a fresh tumen reaches the camp every N turns
+  const HORDE_SIEGE_TURN = 4; // the Horde AI marches on capitals from this turn
+  const UPKEEP = { home: 2, abroad: 4, horde: 2 }; // gold per regiment per turn
   const SUPPLY_CAP = 120;
   HB.KINGDOMS = KINGDOMS; HB.PROVS = PROVS; HB.ROADS = ROADS; HB.ADJ = ADJ; HB.INV = INV; HB.CAMP = CAMP;
 
@@ -88,6 +92,20 @@
   function recruitCost(st, f, r) { return HB.costOf(fac(f), r); }
   function canRecruit(st, f, p) { return st.owner[p] === f && (PROVS[p].cap || PROVS[p].camp || (f === INV && PROVS[p].k !== INV && PROVS[p].cap)); }
 
+  // ---------- Horde threat (AI defence and the human heads-up) ----------
+  // Horde armies that could reach one of f's provinces within 2 marches and outmatch what stands there.
+  function hordeThreats(st, f) {
+    if (f === INV) return [];
+    const out = [], horde = st.armies.filter(a => a.f === INV); if (!horde.length) return out;
+    for (let p = 0; p < PROVS.length; p++) {
+      if (st.owner[p] !== f) continue;
+      const def = st.armies.filter(a => a.p === p && friendly(st, f, a.f)).reduce((s, a) => s + strength(st, a), 0);
+      let best = null;
+      for (const a of horde) { const d = dist(a.p)[p]; if (d > 2) continue; const s = strength(st, a); if (s > def * 0.9 && (!best || d < best.eta || d === best.eta && s > best.str)) best = { p, from: a.p, a: a.id, eta: d, str: Math.round(s), def: Math.round(def), cap: !!PROVS[p].cap }; }
+      if (best) out.push(best);
+    }
+    return out.sort((x, y) => (y.cap - x.cap) || (x.eta - y.eta));
+  }
   // ---------- AI ----------
   function aiOrders(st, f, rnd) {
     const S = st.seats[f], style = S.ai, out = [];
@@ -110,19 +128,21 @@
     for (const a of mine) {
       const s = strength(st, a), here = PROVS[a.p];
       let to = -1;
-      if (f === INV && a.p === CAMP && mine.filter(x => x.p !== CAMP).length) to = -1; // the camp guard stays home
+      if (f === INV && a.p === CAMP && mine.filter(x => x.p !== CAMP).length && !(a.picks.length >= HB.MAX_REGS && st.gold[f] > 220 && st.turn >= HORDE_SIEGE_TURN)) to = -1; // the camp guard stays home (a full camp rides out; gold rebuilds it)
       else if (f === INV) {
         // the horde: pick the weakest reachable capital, mind the supply line
         const lowSupply = st.supply[f] < 25;
+        const early = st.turn < HORDE_SIEGE_TURN ? (n) => !(PROVS[n].cap && st.owner[n] !== INV) : undefined; // and they ride around the walls
         let best = -1, bs = -1e9;
         for (let i = 0; i < PROVS.length; i++) {
           if (st.owner[i] === f || !rival(st.owner[i] < 0 ? 99 : st.owner[i]) && st.owner[i] >= 0) continue;
-          const d = dist(a.p)[i]; if (d > 8) continue;
+          if (PROVS[i].cap && st.turn < HORDE_SIEGE_TURN) continue; // the first turns are border raids: the capitals get time to arm
+          const d = dist(a.p, early)[i]; if (d > 8) continue;
           const def = foesAt(i).reduce((t, x) => t + strength(st, x), 0);
           const v = (PROVS[i].cap ? 900 : 260) - def * 0.8 - d * (lowSupply ? 260 : 90) + (style === 'remi' ? 200 : 0) - (dist(CAMP)[i] * (lowSupply ? 120 : 20));
           if (v > bs && (s > def * (style === 'gamedev' ? 1.25 : 0.9) || def === 0)) { bs = v; best = i; }
         }
-        if (best >= 0 && best !== a.p) to = pathStep(a.p, best);
+        if (best >= 0 && best !== a.p) to = pathStep(a.p, best, early);
         // never walk into a truce partner unless scheming
         if (to >= 0) { const tg = foesAt(to); const ownerT = st.owner[to]; if (ownerT >= 0 && ownerT !== f && friendly(st, f, ownerT) && !(style === 'gamedev' && s > threat(to) * 1.8)) to = -1; void tg; }
       } else {
@@ -130,7 +150,9 @@
         const home = cap >= 0 ? cap : PROVS.findIndex(p => p.k === f && p.cap);
         const capArmies = st.armies.filter(x => x.f === f && x.p === home);
         const isGuard = capArmies.length && capArmies[0].id === a.id;
-        if (isGuard && threat(home) > s * 0.7) to = -1; // hold the walls
+        const hordeNear = hordeThreats(st, f).find(t => t.p === home && t.eta <= 2);
+        if (isGuard && (threat(home) > s * 0.5 || hordeNear)) to = -1; // hold the walls
+        else if (hordeNear && a.p !== home && dist(home)[a.p] <= 3 && hordeNear.str > myStr(home) * 0.8) to = pathStep(a.p, home); // ride home: the Horde is coming
         else {
           // attack adjacent enemies we can beat, retake our land, help allies, or march on the invader
           let best = -1, bs = 0;
@@ -155,7 +177,8 @@
     // recruit
     const rp = PROVS.map((p, i) => i).filter(i => canRecruit(st, f, i));
     let gold = st.gold[f], guard = 0;
-    while (rp.length && gold > 90 && guard++ < 6) {
+    const keep = hordeThreats(st, f).length ? 40 : 90; // spend down to the bone when the Horde is near
+    while (rp.length && gold > keep && guard++ < 6) {
       const p = rp.slice().sort((x, y) => threat(y) - threat(x))[0];
       const ix = HB.draft(KINGDOMS[f].culture, Math.min(gold, 200), rnd)[0]; if (ix == null) break;
       const c = recruitCost(st, f, ix); if (c > gold) break;
@@ -170,7 +193,7 @@
           const vict = [0, 1, 2, 3, 4].filter(k => alive(st, k) && !friendly(st, f, k)).sort((x, y) => Math.min(...PROVS.map((p, i) => st.owner[i] === x ? dist(big.p)[i] : 99)) - Math.min(...PROVS.map((p, i) => st.owner[i] === y ? dist(big.p)[i] : 99)))[0];
           if (vict != null && !st.offers.some(o => o.from === f && o.to === vict) && rnd() < 0.6) {
             const land = PROVS.findIndex((p, i) => st.owner[i] === vict && !p.cap && ADJ[i].some(n => st.owner[n] === f));
-            out.push({ k: 'of', to: vict, kind: 'tribute', give: { gold: Math.min(400, Math.max(100, Math.round(st.gold[vict] * 0.6 / 10) * 10)), supply: 10 + Math.round(rnd() * 2) * 5, land, levy: rnd() < 0.5 ? 50 : 0 }, truce: 4 + Math.floor(rnd() * 5) });
+            out.push({ k: 'of', to: vict, kind: 'tribute', give: { gold: Math.min(250, Math.max(80, Math.round(st.gold[vict] * 0.6 / 10) * 10)), supply: 10 + Math.round(rnd() * 2) * 5, land, levy: rnd() < 0.5 ? 50 : 0 }, truce: 4 + Math.floor(rnd() * 5) });
           }
         }
       } else {
@@ -392,7 +415,7 @@
       if (fs.length === 1 && st.owner[p] !== fs[0] && !(st.owner[p] >= 0 && friendly(st, fs[0], st.owner[p]))) {
         const prev = st.owner[p]; st.owner[p] = fs[0];
         log(st, `${KINGDOMS[fs[0]].name} takes ${PROVS[p].name}${prev >= 0 ? ' from ' + KINGDOMS[prev].name : ''}.`, fs[0]);
-        if (fs[0] === INV && !((st.plundered = st.plundered || {})[p] > st.turn - 8)) { st.plundered[p] = st.turn; st.supply[INV] = Math.min(SUPPLY_CAP, st.supply[INV] + (PROVS[p].cap ? 35 : 20)); st.gold[INV] += PROVS[p].cap ? 120 : 40; log(st, `The Horde plunders ${PROVS[p].name}.`, INV); } // a province can only be stripped once in a while
+        if (fs[0] === INV && !((st.plundered = st.plundered || {})[p] > st.turn - 8)) { st.plundered[p] = st.turn; st.supply[INV] = Math.min(SUPPLY_CAP, st.supply[INV] + (PROVS[p].cap ? 25 : 12)); st.gold[INV] += PROVS[p].cap ? 60 : 25; log(st, `The Horde plunders ${PROVS[p].name}.`, INV); } // a province can only be stripped once in a while
       }
     }
     // economy and supply
@@ -403,6 +426,10 @@
     for (let f = 0; f < 6; f++) {
       let inc = 0; st.owner.forEach((o, i) => { if (o === f) inc += INCOME(PROVS[i]); });
       st.gold[f] += f === INV ? Math.round(inc * 0.6) : inc; // occupied land yields little coin
+      // gold upkeep: every regiment draws pay (more on campaign abroad); unpaid troops desert
+      const pay = st.armies.filter(a => a.f === f).reduce((t, a) => t + a.picks.length * (f === INV ? UPKEEP.horde : st.owner[a.p] === f ? UPKEEP.home : UPKEEP.abroad), 0);
+      st.pay = st.pay || KINGDOMS.map(() => 0); st.pay[f] = pay; st.gold[f] -= pay;
+      if (st.gold[f] < 0) { st.gold[f] = 0; for (const a of st.armies.filter(a => a.f === f)) a.hp = a.hp.map(h => Math.max(8, Math.round(h * 0.93))); log(st, `${KINGDOMS[f].name} cannot pay its soldiers: men desert.`, f); }
       let up = 0;
       for (const a of st.armies.filter(a => a.f === f)) {
         if (f === INV) up += 6 + Math.round(a.picks.length / 2) + Math.min(5, fromHeld[a.p]) * 4 - (!a.moved && st.owner[a.p] === INV ? 4 : 0);
@@ -418,10 +445,10 @@
       // armies recover a little in their own land
       for (const a of st.armies.filter(a => a.f === f && st.owner[a.p] === f)) a.hp = a.hp.map(h => Math.min(100, h + (f === INV ? (a.moved ? 6 : 15) : (a.moved ? 12 : 25)))); // resting armies recover faster; the Horde is far from home
     }
-    // levies arrive
+    // the tribute recruits arrive (internal key: levy; display names in HB.CONFIG.tribute / .recruits)
     for (const l of st.levies.filter(l => l.at <= st.turn + 1)) {
       const p = PROVS.findIndex((pp, i) => (pp.cap || pp.camp) && st.owner[i] === l.f);
-      if (p >= 0) { const F = fac(l.f); const cheap = F.roster.map((r, i) => i).filter(i => i < F.siege0).sort((x, y) => HB.costOf(F, x) - HB.costOf(F, y))[0]; addArmy(st, l.f, p, Array(Math.max(1, Math.round(l.men / 50))).fill(cheap)); log(st, l.f === INV ? `The Janissary levy: ${l.men} boys taken from ${KINGDOMS[l.from].name} march under the dragon banner.` : `A levy of ${l.men} recruits from ${KINGDOMS[l.from].name} joins ${KINGDOMS[l.f].name}.`, l.f); }
+      if (p >= 0) { const F = fac(l.f); const cheap = F.oath0 != null ? F.oath0 : F.roster.map((r, i) => i).filter(i => i < F.siege0).sort((x, y) => HB.costOf(F, x) - HB.costOf(F, y))[0]; addArmy(st, l.f, p, Array(Math.max(1, Math.round(l.men / 50))).fill(cheap)); const N = HB.names(); log(st, l.f === INV ? `${N.tribute} paid: ${l.men} ${N.recruits} taken from ${KINGDOMS[l.from].name} now ride with the Horde.` : `${N.tribute} paid: ${l.men} ${N.recruits} from ${KINGDOMS[l.from].name} join ${KINGDOMS[l.f].name}.`, l.f); }
     }
     st.levies = st.levies.filter(l => l.at > st.turn + 1);
     st.treaties = st.treaties.filter(t => t.kind === 'alliance' || t.until > st.turn);
@@ -429,7 +456,7 @@
     // victory
     const caps = capitalsHeldBy(st, INV);
     // the steppe keeps sending riders while the camp stands
-    if (st.owner[CAMP] === INV && st.turn % 3 === 0) {
+    if (st.owner[CAMP] === INV && st.turn % TUMEN_EVERY === 0) {
       const F = fac(INV), line = F.roster.map((r, i) => i).filter(i => i < F.siege0).sort((x, y) => HB.costOf(F, x) - HB.costOf(F, y)).slice(0, 3);
       addArmy(st, INV, CAMP, [line[0], line[1] != null ? line[1] : line[0], line[2] != null ? line[2] : line[0], line[0]]);
       log(st, 'A fresh tumen rides out of the steppe to the Invader Camp.', INV);
@@ -451,5 +478,5 @@
   function hashState(st) { const c = Object.assign({}, st); delete c.log; return hashStr(JSON.stringify(c)); }
 
   HB.Campaign = { create, submit, ready, resolve, finishBattle, battleMatch, battleResult, autoResolve, aiOrders, strength, friendly, treaty, alive, humanSeats,
-    capitalsHeldBy, dist, pathStep, canRecruit, recruitCost, hash: hashState, KINGDOMS, PROVS, ROADS, ADJ, INV, CAMP, SUPPLY_CAP, SPY_COST, endTurn };
+    capitalsHeldBy, dist, pathStep, canRecruit, recruitCost, hordeThreats, UPKEEP, hash: hashState, KINGDOMS, PROVS, ROADS, ADJ, INV, CAMP, SUPPLY_CAP, SPY_COST, endTurn };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -13,16 +13,20 @@
 </head>
 <body>
 <div id="app">
+  <!-- loading -->
+  <section id="loading" class="loading on"><div class="ldbg"></div><div class="ldbox"><div class="logo" id="ldLogo">Timeline Brawl</div><div class="sublogo" id="ldSub">The Five Crowns</div><div class="ldbar"><b id="ldFill"></b></div><div class="ldtip" id="ldTip">Sharpening pikes…</div></div></section>
   <!-- title -->
   <section id="title" class="screen on">
     <div class="titlebg"></div>
     <div class="titlebox">
-      <div class="logo">Timeline Brawl</div>
-      <div class="sublogo">The Five Crowns</div>
-      <div class="trial">Trial version</div>
+      <div class="logo" id="logoTxt">Timeline Brawl</div>
+      <div class="sublogo" id="subTxt">The Five Crowns</div>
+      <div class="crestrow" id="crestRow"></div>
+      <div class="trial" id="tagTxt">Trial version</div>
       <button class="btn big gold" id="bQuick">⚔ Quick Battle</button>
       <button class="btn big" id="bPlay">Play ▸</button>
-      <div class="row2"><button class="btn" id="bCustom">Custom battle</button><button class="btn" id="bHow">How to play</button></div>
+      <div class="row2"><button class="btn" id="bCustom">Custom battle</button><button class="btn" id="bPreset" title="Quick Battle preset: a braced phalanx against a lancer charge">Pikes vs Charge</button></div>
+      <div class="row2 row3"><button class="btn" id="bHow">How to play</button><button class="btn mute" id="bMute" aria-label="Sound on/off" aria-pressed="false">🔊</button></div>
       <div class="foot">Pre-gunpowder warfare · pike beats horse · horse beats bow · bow beats slow foot</div>
     </div>
   </section>
@@ -54,7 +58,7 @@
     <div class="tip" id="tip"></div>
     <div class="bbar">
       <button class="btn gold" id="bStart" style="display:none">⚔ Start battle</button>
-      <button class="btn sm" id="bCurse" title="Curse an enemy regiment">☾ Curse <span id="faith"></span></button>
+      <button class="btn sm" id="bCurse" title="Curse meter: your army's faith / the cost of a Curse. Tap, then an enemy regiment.">☾ Curse <span class="faith" id="faith"></span></button>
       <button class="btn sm" id="bAuto">Auto</button>
       <button class="btn sm" id="bSpeed">1×</button>
       <button class="btn sm" id="bExit">✕</button>
@@ -67,7 +71,12 @@
   <div class="modal" id="modal"><div class="scroll" id="modalBody"></div></div>
   <div class="cover" id="cover"></div>
   <div class="toast" id="toast"></div>
+  <div class="tut" id="tut"><div class="tutbox"><div class="tutn" id="tutN"></div><div class="tutt" id="tutT"></div><div class="tutb"><button class="btn sm" id="tutSkip">Skip tips</button><button class="btn sm gold" id="tutNext">Got it</button></div></div></div>
+  <div class="flourish" id="flourish"><div class="fl1"></div><div class="flt" id="flT"></div><div class="fls" id="flS"></div></div>
+  <div class="fader" id="fader"></div>
 </div>
+<script src="js/config.js"></script>
+<script src="js/art.js"></script>
 <script src="js/data.js"></script>
 <script src="js/sim.js"></script>
 <script src="js/siege.js"></script>

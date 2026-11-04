@@ -173,11 +173,11 @@
     constructor(canvas) {
       this.cv = canvas; this.g = canvas.getContext('2d', { alpha: false });
       this.cam = { x: W / 2, y: H / 2, z: 0.5 }; this.camT = null; this.userCam = 0;
-      this.parts = []; this.texts = []; this.flashes = []; this.shake = 0; this.banner = null;
+      this.parts = []; this.dust = []; this.texts = []; this.flashes = []; this.shake = 0; this.banner = null; this.slowReq = 0; this.slowCd = 0;
       this.spr = new Map(); this.colors = []; this.me = 0; this.sel = null; this.ring = null; this.hoverPath = null; this.dpr = 1;
     }
     setBattle(b, colors, me) {
-      this.b = b; this.colors = colors; this.me = me; this.terrain = paintTerrain(b); this.spr.clear(); this.parts = []; this.texts = []; this.flashes = [];
+      this.b = b; this.colors = colors; this.me = me; this.terrain = paintTerrain(b); this.spr.clear(); this.parts = []; this.dust = []; this.texts = []; this.flashes = []; this.slowReq = 0; this.slowCd = 0;
       this.resize(); this.fit(true);
     }
     resize() {
@@ -226,12 +226,13 @@
         }
       }
       if (this.focus && this.focus.T > 0) { this.focus.T -= dt; tx = this.focus.x; ty = this.focus.y; tz = fz * 1.8; }
-      const k = Math.min(1, dt * 1.2), c = this.cam;
-      c.x += (tx - c.x) * k; c.y += (ty - c.y) * k; c.z += (tz - c.z) * k * 0.8; this.clampCam();
+      const k = 1 - Math.exp(-dt * 3.2), kz = 1 - Math.exp(-dt * 2.4), c = this.cam; // exponential ease: smooth at any frame rate
+      c.x += (tx - c.x) * k; c.y += (ty - c.y) * k; c.z += (tz - c.z) * kz; this.clampCam();
     }
     sprite(r, col) {
       const kind = kindOf(r), nb = Math.max(1, Math.round(r.n / Math.max(1, r.n0) * 20));
-      const key = r.form + '|' + nb + '|' + Math.round(r.coh * 5) + '|' + kind + '|' + col + '|' + Math.round(r.W) + '|' + Math.round(r.D);
+      const brz = kind === 'spear' && (r._brA || 0) > 0.5 ? 1 : 0;
+      const key = r.form + '|' + nb + '|' + Math.round(r.coh * 5) + '|' + kind + '|' + col + '|' + Math.round(r.W) + '|' + Math.round(r.D) + '|' + brz;
       let s = this.spr.get(r.id); if (s && s.key === key) return s;
       const big = kind === 'ele' || kind === 'ram' || kind === 'tower' || kind === 'sie' || kind === 'treb';
       const st = stamp(kind, col);
@@ -248,13 +249,13 @@
       let files = Math.max(1, Math.round(r.files * k)), ranks = Math.max(1, Math.ceil(men * (big ? 1 : VIS * dens) / files));
       if (big) { files = Math.max(1, Math.min(r.files, men)); ranks = Math.max(1, Math.ceil(men / files)); if (kind === 'ele') { files = Math.ceil(Math.sqrt(men)); ranks = Math.ceil(men / files); } }
       const total = big ? (kind === 'ram' || kind === 'tower' ? 1 : (kind === 'ele' ? men : Math.max(1, Math.round(men / 3)))) : Math.round(men * VIS * dens);
-      const sx = Dw / Math.max(1, ranks), sy = Ww / Math.max(1, files);
+      const sx = Dw / Math.max(1, ranks), sy = Ww / Math.max(1, files) * (brz ? 0.9 : 1); // braced: the line closes up
       g.save(); g.translate(cw / 2, ch / 2); g.scale(PX, PX);
       const sw = st.width / (big ? (kind === 'ele' ? 2.2 : 1.6) : 2.6), sh = st.height / (big ? (kind === 'ele' ? 2.2 : 1.6) : 2.6);
       let placed = 0;
       for (let i = 0; i < ranks && placed < total; i++) {
         for (let j = 0; j < files && placed < total; j++) {
-          let lx = Dw / 2 - (i + 0.5) * sx, ly = -Ww / 2 + (j + 0.5) * sy;
+          let lx = Dw / 2 - (i + 0.5) * sx, ly = (-Ww / 2 + (j + 0.5) * sy / (brz ? 0.9 : 1)) * (brz ? 0.9 : 1);
           if (r.form === 'wedge') { const half = Ww / 2 * (1 - (Dw / 2 - lx) / Dw * 0.0); const fr = (i + 1) / ranks; if (Math.abs(ly) > Ww / 2 * fr + 0.1) continue; void half; }
           if (r.form === 'horns') lx -= (ly * ly) / (Ww * Ww / 4) * Dw * -0.8 + Dw * 0.4;
           lx += (rnd() - 0.5) * jit * sx * 2; ly += (rnd() - 0.5) * jit * sy * 2;
@@ -273,23 +274,35 @@
         const n = Math.min(e.n || 1, e.kind === 'rock' ? 1 : 10);
         for (let i = 0; i < n && this.parts.length < 500; i++) this.parts.push({ k: e.kind === 'rock' || e.kind === 'bolt' ? 'rock' : 'arrow', x0: e.x0 + (Math.random() - 0.5) * 30, y0: e.y0 + (Math.random() - 0.5) * 12, x1: e.x1 + (Math.random() - 0.5) * 30, y1: e.y1 + (Math.random() - 0.5) * 14, t: -Math.random() * 0.25, T: e.kind === 'rock' ? 1.1 : 0.55, wall: e.wall });
       } else if (e.k === 'impact') {
-        const big = e.zone === 2 || e.power > 6;
-        this.flashes.push({ x: e.x, y: e.y, t: 0, T: big ? 0.5 : 0.3, r: big ? 46 : 22, col: e.zone === 2 ? '#fff1b8' : e.braced ? '#e8f0ff' : '#ffe0a0' });
-        const n = e.zone === 2 ? 46 : e.cav ? 16 : 6, col = this.colorOf(e.vs);
-        for (let i = 0; i < n && this.parts.length < 700; i++) { const a = (e.ang || 0) + (Math.random() - 0.5) * (e.zone === 2 ? 2.4 : 1.6), v = 30 + Math.random() * (e.zone === 2 ? 110 : 50); this.parts.push({ k: 'dot', x: e.x, y: e.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, t: 0, T: 0.7 + Math.random() * 0.6, col }); }
-        if (e.zone === 2) { this.shake = Math.max(this.shake, 1); this.focus = { x: e.x, y: e.y, T: 1.6 }; this.slow = 0.9; }
+        const big = e.zone === 2 || e.power > 6, flank = e.zone === 1;
+        this.flashes.push({ x: e.x, y: e.y, t: 0, T: big ? 0.5 : flank ? 0.42 : 0.3, r: big ? 46 : flank ? 34 : 22, col: e.zone === 2 ? '#fff1b8' : flank ? '#ffc070' : e.braced ? '#e8f0ff' : '#ffe0a0' });
+        const n = e.zone === 2 ? 46 : flank ? 26 : e.cav ? 16 : 6, col = this.colorOf(e.vs);
+        for (let i = 0; i < n && this.parts.length < 700; i++) { const a = (e.ang || 0) + (Math.random() - 0.5) * (e.zone ? 2.4 : 1.6), v = 30 + Math.random() * (e.zone === 2 ? 110 : flank ? 80 : 50); this.parts.push({ k: 'dot', x: e.x, y: e.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, t: 0, T: 0.7 + Math.random() * 0.6, col }); }
+        if (e.cav || e.zone) this.puff(e.x, e.y, e.zone === 2 ? 10 : 6, 1.4); // dust thrown up by the charge
+        if (e.zone === 2) { this.shake = Math.max(this.shake, 1); this.focus = { x: e.x, y: e.y, T: 1.6 }; this.slow = 0.9; this.flashes.push({ x: e.x, y: e.y, t: 0, T: 0.7, r: 70, col: '#fff1b8', ring: 1 }); this.texts.push({ x: e.x, y: e.y - 12, text: 'REAR CHARGE!', col: '#fff1b8', t: 0, T: 1.8, big: 1 }); }
+        else if (flank) { this.shake = Math.max(this.shake, 0.6); this.flashes.push({ x: e.x, y: e.y, t: 0, T: 0.55, r: 50, col: '#ffc070', ring: 1 }); this.texts.push({ x: e.x, y: e.y - 12, text: 'FLANKED!', col: '#ffc070', t: 0, T: 1.4, big: 1 }); this.wantSlow(0.45, 3); }
+        else if (e.braced) { this.shake = Math.max(this.shake, 0.55); this.flashes.push({ x: e.x, y: e.y, t: 0, T: 0.6, r: 56, col: '#e8f0ff', ring: 1 }); const bb = this.b.regs.find(r => r.side === e.vs && Math.hypot(r.x - e.x, r.y - e.y) < Math.max(r.W, r.D)); if (bb) bb._brT = 1.4; }
         else if (e.cav) this.shake = Math.max(this.shake, 0.35);
       } else if (e.k === 'callout') {
-        this.texts.push({ x: e.x, y: e.y, text: e.text, col: e.color, t: 0, T: e.big ? 2.2 : 1.4, big: e.big });
+        const br = e.text === 'BRACED!'; // the pike wall holds: a big, unmissable callout
+        this.texts.push({ x: e.x, y: e.y, text: br ? 'BRACED' : e.text, col: br ? '#e8f0ff' : e.color, t: 0, T: br ? 2 : e.big ? 2.2 : 1.4, big: e.big || br });
         if (this.texts.length > 14) this.texts.shift();
       } else if (e.k === 'breach') {
         this.flashes.push({ x: e.x, y: e.y, t: 0, T: 0.8, r: 60, col: '#ffd890' }); this.shake = Math.max(this.shake, 0.9); this.focus = { x: e.x, y: e.y, T: 1.4 };
         for (let i = 0; i < 40; i++) { const a = Math.random() * TAU, v = 20 + Math.random() * 80; this.parts.push({ k: 'dot', x: e.x, y: e.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, t: 0, T: 1 + Math.random(), col: '#8a8174' }); }
+        for (let i = 0; i < 22; i++) { const a = Math.random() * TAU, v = 25 + Math.random() * 70; this.parts.push({ k: 'chunk', x: e.x, y: e.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, z: 0, vz: 40 + Math.random() * 70, rot: Math.random() * TAU, s: 1.5 + Math.random() * 2.5, t: 0, T: 1.6 + Math.random() * 0.6, col: Math.random() < 0.5 ? '#9c9282' : '#7d756a' }); } // masonry flies
+        this.puff(e.x, e.y, 14, 2.6); this.wantSlow(1.2, 0);
+        this.texts.push({ x: e.x, y: e.y - 14, text: e.gate ? 'GATE BROKEN' : 'BREACH!', col: '#ffd890', t: 0, T: 2, big: 1 });
       } else if (e.k === 'oil') { for (let i = 0; i < 18; i++) { const a = Math.random() * TAU, v = 5 + Math.random() * 25; this.parts.push({ k: 'dot', x: e.x, y: e.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, t: 0, T: 1.2, col: '#ff8a2a' }); } }
       else if (e.k === 'ram') this.flashes.push({ x: e.x, y: e.y, t: 0, T: 0.18, r: 14, col: '#ffe0a0' });
       else if (e.k === 'curse') this.flashes.push({ x: e.x, y: e.y, t: 0, T: 1.2, r: 50, col: '#b070ff', ring: 1 });
       else if (e.k === 'ability') this.flashes.push({ x: e.x, y: e.y, t: 0, T: 1, r: 70, col: '#ffd34a', ring: 1 });
-      else if (e.k === 'rout') this.texts.push({ x: e.x, y: e.y - 8, text: 'ROUTED', col: '#ff9a7a', t: 0, T: 1.2 });
+      else if (e.k === 'rout') { this.texts.push({ x: e.x, y: e.y - 8, text: 'ROUTED', col: '#ff9a7a', t: 0, T: 1.4, big: 1 }); this.puff(e.x, e.y, 5, 1.2); this.wantSlow(0.5, 6); }
+    }
+    // cheap game-feel helpers: a slow-motion request the UI consumes (with a cooldown so routs never drag), and dust puffs
+    wantSlow(sec, cd) { if (this.slowCd > 0 && cd) return; this.slowReq = Math.max(this.slowReq, sec); this.slowCd = cd || 0; }
+    puff(x, y, n, sz) {
+      for (let i = 0; i < n && this.dust.length < 160; i++) { const a = Math.random() * TAU, v = 4 + Math.random() * 16; this.dust.push({ x: x + (Math.random() - 0.5) * 10, y: y + (Math.random() - 0.5) * 10, vx: Math.cos(a) * v, vy: Math.sin(a) * v, r: (3 + Math.random() * 4) * (sz || 1), t: 0, T: 1.1 + Math.random() * 0.9 }); }
     }
     draw(dt, ui) {
       const b = this.b, g = this.g, dpr = this.dpr; if (!b) return;
@@ -306,6 +319,12 @@
       if (b.S) this.drawWalls(g, b);
       // orders: thin dotted path for the selected regiment
       if (this.sel != null) { const r = b.regs[this.sel]; if (r && r.order && r.order.k === 'mv' && r.st === 0) { g.setLineDash([4 / c.z * 2, 4 / c.z * 2]); g.strokeStyle = 'rgba(255,225,140,0.85)'; g.lineWidth = 1.6 / c.z; g.beginPath(); g.moveTo(r.x, r.y); g.lineTo(r.order.x, r.order.y); g.stroke(); g.setLineDash([]); } }
+      this.slowCd = Math.max(0, this.slowCd - dt);
+      // dust: galloping cavalry kick it up; drawn under the men
+      this.dustT = (this.dustT || 0) + dt;
+      if (this.dustT > 0.12) { this.dustT = 0; for (const r of b.regs) if (r.st === 0 && r.def.cls === 'cav' && r.moving && r.mom > 0.3 && this.dust.length < 140) { const bx = r.x - Math.cos(r.f) * r.D * 0.6, by = r.y - Math.sin(r.f) * r.D * 0.6; this.dust.push({ x: bx + (Math.random() - 0.5) * r.W * 0.6, y: by + (Math.random() - 0.5) * r.W * 0.6, vx: -Math.cos(r.f) * 6, vy: -Math.sin(r.f) * 6, r: 3 + r.mom * 4, t: 0, T: 1.2 }); } }
+      for (let i = this.dust.length - 1; i >= 0; i--) { const d = this.dust[i]; d.t += dt; if (d.t > d.T) { this.dust.splice(i, 1); continue; } d.x += d.vx * dt; d.y += d.vy * dt; d.vx *= 0.95; d.vy *= 0.95; const u = d.t / d.T; g.globalAlpha = 0.32 * (1 - u); g.fillStyle = '#c8b48a'; g.beginPath(); g.arc(d.x, d.y, d.r * (0.6 + u * 0.9), 0, TAU); g.fill(); }
+      g.globalAlpha = 1;
       // regiments: shadows, then sprites
       const vis = [];
       for (const r of b.regs) {
@@ -318,19 +337,32 @@
         if (r.def.cls === 'mon') { this.drawMonster(g, r, b); continue; }
         const col = this.colorOf(r.side);
         if (r.st === 1) { this.drawRouters(g, r, col); continue; }
+        if (kindOf(r) === 'spear') this.braceAnim(r, b, dt);
         const s = this.sprite(r, col);
         g.save(); g.translate(r.x, r.y); g.rotate(r.f);
         if (r.hidden) g.globalAlpha = 0.55;
         g.drawImage(s.c, -s.w / 2 - (s.off || 0), -s.h / 2, s.w, s.h);
+        if (r._brA > 0.02) { // the spear hedge: pikes come down over the front ranks
+          const L = 3 + r._brA * 9, x0 = r.D / 2 - 1, n = Math.max(3, Math.min(24, Math.round(r.W / 3))); g.strokeStyle = 'rgba(225,218,196,' + (0.35 + r._brA * 0.55) + ')'; g.lineWidth = 0.6; g.beginPath();
+          for (let i = 0; i < n; i++) { const y = (-r.W / 2 + (i + 0.5) * r.W / n) * 0.9; g.moveTo(x0 - 2, y); g.lineTo(x0 + L, y + (1 - r._brA) * 2.2); } g.stroke();
+          if (r._brT > 0) { g.strokeStyle = 'rgba(232,240,255,' + Math.min(0.9, r._brT) + ')'; g.lineWidth = 1.6; g.strokeRect(-r.D / 2, -r.W / 2 * 0.9, r.D + L, r.W * 0.9); }
+        }
         g.restore();
       }
       // missiles and debris
       for (let i = this.parts.length - 1; i >= 0; i--) {
         const p = this.parts[i]; p.t += dt; if (p.t > p.T) { this.parts.splice(i, 1); continue; } if (p.t < 0) continue;
         if (p.k === 'arrow' || p.k === 'rock') {
-          const u = p.t / p.T, x = p.x0 + (p.x1 - p.x0) * u, y = p.y0 + (p.y1 - p.y0) * u - Math.sin(u * Math.PI) * (p.k === 'rock' ? 60 : 22);
+          const u = p.t / p.T, gx = p.x0 + (p.x1 - p.x0) * u, gy = p.y0 + (p.y1 - p.y0) * u, Lr = Math.hypot(p.x1 - p.x0, p.y1 - p.y0), hh = p.k === 'rock' ? 60 : Math.min(70, 12 + Lr * 0.22), x = gx, y = gy - Math.sin(u * Math.PI) * hh;
           if (p.k === 'rock') { g.fillStyle = 'rgba(0,0,0,0.25)'; g.beginPath(); g.arc(p.x0 + (p.x1 - p.x0) * u, p.y0 + (p.y1 - p.y0) * u, 2.2, 0, TAU); g.fill(); g.fillStyle = '#5a5248'; g.beginPath(); g.arc(x, y, 2.6, 0, TAU); g.fill(); if (u > 0.94) this.flashes.push({ x: p.x1, y: p.y1, t: 0, T: 0.35, r: 16, col: '#d8c7a0' }); }
-          else { const dx = (p.x1 - p.x0), dy = (p.y1 - p.y0), L = Math.hypot(dx, dy) || 1; g.strokeStyle = 'rgba(40,28,15,0.85)'; g.lineWidth = 0.7; g.beginPath(); g.moveTo(x, y); g.lineTo(x - dx / L * 4, y - dy / L * 4); g.stroke(); }
+          else { // visible arc: shadow on the ground, a pale streak along the flight path, and the shaft
+            const L = Lr || 1, du = 0.05, pu = Math.max(0, u - du), px = p.x0 + (p.x1 - p.x0) * pu, py = p.y0 + (p.y1 - p.y0) * pu - Math.sin(pu * Math.PI) * hh;
+            g.fillStyle = 'rgba(0,0,0,0.18)'; g.fillRect(gx - 1, gy - 0.4, 2, 0.8);
+            g.strokeStyle = 'rgba(255,248,225,0.35)'; g.lineWidth = 0.9; g.beginPath(); g.moveTo(px, py); g.lineTo(x, y); g.stroke();
+            const ax = x - px || (p.x1 - p.x0) / L, ay = y - py || (p.y1 - p.y0) / L, al = Math.hypot(ax, ay) || 1;
+            g.strokeStyle = 'rgba(40,28,15,0.9)'; g.lineWidth = 0.8; g.beginPath(); g.moveTo(x, y); g.lineTo(x - ax / al * 5, y - ay / al * 5); g.stroke(); }
+        } else if (p.k === 'chunk') { p.x += p.vx * dt; p.y += p.vy * dt; p.vz -= 160 * dt; p.z = Math.max(0, p.z + p.vz * dt); if (p.z === 0) { p.vx *= 0.8; p.vy *= 0.8; } p.rot += dt * 6 * (p.z > 0 ? 1 : 0);
+          g.globalAlpha = Math.min(1, (p.T - p.t) * 2); g.fillStyle = 'rgba(0,0,0,0.25)'; g.fillRect(p.x - p.s / 2, p.y - p.s / 2, p.s, p.s); g.save(); g.translate(p.x, p.y - p.z); g.rotate(p.rot); g.fillStyle = p.col; g.fillRect(-p.s / 2, -p.s / 2, p.s, p.s); g.restore(); g.globalAlpha = 1;
         } else { p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.92; p.vy *= 0.92; g.globalAlpha = 1 - p.t / p.T; g.fillStyle = p.col; g.fillRect(p.x - 0.8, p.y - 0.8, 1.6, 1.6); g.globalAlpha = 1; }
       }
       for (let i = this.flashes.length - 1; i >= 0; i--) {
@@ -340,33 +372,48 @@
         else { const gr = g.createRadialGradient(f.x, f.y, 0, f.x, f.y, f.r * (0.5 + u)); gr.addColorStop(0, f.col); gr.addColorStop(1, 'rgba(255,240,200,0)'); g.fillStyle = gr; g.beginPath(); g.arc(f.x, f.y, f.r * (0.5 + u), 0, TAU); g.fill(); }
         g.globalAlpha = 1;
       }
-      // screen space: morale bars and callouts
+      // screen space: one badge per block, centred on it (28-32px at play zoom), morale as the ring around it; overlaps are nudged or hidden
       g.setTransform(dpr, 0, 0, dpr, shx * dpr, shy * dpr);
-      for (const r of vis) {
-        if (r.st !== 0 || r.def.cls === 'mon') continue;
-        const p = this.toScreen(r.x, r.y), half = Math.max(r.W, r.D) / 2 * c.z;
-        const bw = Math.max(16, Math.min(34, r.W * c.z * 0.6)), y = p.y - half - 7;
-        if (p.x < -40 || p.x > this.vw + 40 || p.y < -40 || p.y > this.vh + 40) continue;
-        const m = Math.max(0, Math.min(1, r.morale / 100));
-        g.fillStyle = 'rgba(20,14,6,0.8)'; g.fillRect(p.x - bw / 2 - 1, y - 1, bw + 2, 4);
-        g.fillStyle = m > 0.55 ? '#7fbf4a' : m > 0.3 ? '#e0b53a' : '#d0452f'; g.fillRect(p.x - bw / 2, y, bw * m, 2);
-        g.fillStyle = this.colorOf(r.side); g.fillRect(p.x - bw / 2 - 3, y - 1, 2, 4);
-        if (r.def.cls !== 'mon') drawUnitIcon(g, iconOf(r), p.x - bw / 2 - 13, y + 1, Math.max(8, Math.min(12, 8 + c.z * 3)), this.colorOf(r.side));
+      const fz = this.fitZ(), bs = c.z >= fz * 1.6 ? 14 : c.z >= fz * 1.1 ? 12 : 9, placed = [];
+      const list = []; for (const r of vis) { if (r.st !== 0 || r.def.cls === 'mon') continue; const p = this.toScreen(r.x, r.y); if (p.x < -40 || p.x > this.vw + 40 || p.y < -40 || p.y > this.vh + 40) continue; list.push({ r, x: p.x, y: p.y }); }
+      list.sort((a, b2) => (a.r.id === this.sel ? -1 : 0) - (b2.r.id === this.sel ? -1 : 0) || a.y - b2.y);
+      for (const it of list) {
+        let { x, y } = it, ok = false;
+        for (const dy of [0, -bs * 1.1, bs * 1.1]) { if (placed.every(q => Math.hypot(q.x - x, q.y - (it.y + dy)) > bs * 1.9)) { y = it.y + dy; ok = true; break; } }
+        if (!ok) { g.fillStyle = this.colorOf(it.r.side); g.beginPath(); g.arc(it.x, it.y, 3, 0, TAU); g.fill(); continue; } // too crowded: a pip, not a pile of badges
+        placed.push({ x, y }); const r = it.r, m = Math.max(0, Math.min(1, r.morale / 100));
+        g.globalAlpha = r.hidden ? 0.55 : 0.92;
+        drawUnitIcon(g, iconOf(r), x, y, bs, this.colorOf(r.side));
+        g.lineWidth = Math.max(2, bs * 0.2); g.strokeStyle = 'rgba(20,14,6,0.75)'; g.beginPath(); g.arc(x, y, bs + g.lineWidth * 0.9, 0, TAU); g.stroke();
+        g.strokeStyle = m > 0.55 ? '#7fbf4a' : m > 0.3 ? '#e0b53a' : '#d0452f'; g.beginPath(); g.arc(x, y, bs + g.lineWidth * 0.9, -Math.PI / 2, -Math.PI / 2 + TAU * m); g.stroke();
+        g.globalAlpha = 1;
       }
+      this.badges = placed;
       // selection ring + formation picker (world-anchored, screen-sized), drawn over the unit badges
       if (this.sel != null) { g.setTransform(dpr * c.z, 0, 0, dpr * c.z, dpr * (this.vw / 2 - c.x * c.z + shx), dpr * (this.vh / 2 - c.y * c.z + shy)); this.drawSelection(g, b.regs[this.sel], ui); g.setTransform(dpr, 0, 0, dpr, shx * dpr, shy * dpr); }
       g.textAlign = 'center'; g.textBaseline = 'middle';
+      const tPl = []; // callouts never stack on top of each other: a later one steps up a line
       for (let i = this.texts.length - 1; i >= 0; i--) {
         const t = this.texts[i]; t.t += dt; if (t.t > t.T) { this.texts.splice(i, 1); continue; }
         const p = this.toScreen(t.x, t.y), u = t.t / t.T, sz = t.big ? 17 : 12;
         g.globalAlpha = u < 0.8 ? 1 : (1 - u) / 0.2; g.font = '700 ' + sz + 'px ' + FONT;
-        g.lineWidth = 3.5; g.strokeStyle = 'rgba(25,15,5,0.9)'; g.strokeText(t.text, p.x, p.y - u * 18); g.fillStyle = t.col || '#ffe9b0'; g.fillText(t.text, p.x, p.y - u * 18);
+        const w = g.measureText(t.text).width / 2 + 4; let y = p.y - u * 18;
+        if (tPl.some(q => q.s === t.text && Math.abs(q.x - p.x) < 60 && Math.abs(q.y0 - p.y) < 40)) { g.globalAlpha = 1; continue; } // same word, same spot: show once
+        for (let k = 0; k < 5 && tPl.some(q => Math.abs(q.x - p.x) < q.w + w && Math.abs(q.y - y) < (q.h + sz) / 2 + 2); k++) y -= sz + 4;
+        tPl.push({ x: p.x, y, y0: p.y, w, h: sz, s: t.text });
+        g.lineWidth = 3.5; g.strokeStyle = 'rgba(25,15,5,0.9)'; g.strokeText(t.text, p.x, y); g.fillStyle = t.col || '#ffe9b0'; g.fillText(t.text, p.x, y);
         g.globalAlpha = 1;
       }
       // wrath tint
       if (b.wrath && b.wrath.mon) { g.setTransform(dpr, 0, 0, dpr, 0, 0); g.fillStyle = 'rgba(120,20,10,0.12)'; g.fillRect(0, 0, this.vw, this.vh); }
       if (b.weather === 'fog') { g.setTransform(dpr, 0, 0, dpr, 0, 0); g.fillStyle = 'rgba(220,220,210,0.18)'; g.fillRect(0, 0, this.vw, this.vh); }
       if (b.weather === 'rain') { g.setTransform(dpr, 0, 0, dpr, 0, 0); g.strokeStyle = 'rgba(200,210,230,0.25)'; g.lineWidth = 1; g.beginPath(); for (let i = 0; i < 60; i++) { const x = Math.random() * this.vw, y = Math.random() * this.vh; g.moveTo(x, y); g.lineTo(x - 3, y + 10); } g.stroke(); }
+    }
+    braceAnim(r, b, dt) { // spears lower when the block stands braced and horse is near (or a charge just broke on it)
+      let want = 0;
+      if (r.st === 0 && !r.moving && b.braced && b.braced(r, 0) > 0.4) { for (const q of b.regs) if (q.st === 0 && q.side !== r.side && (q.def.cls === 'cav' || q.def.cls === 'ele') && Math.hypot(q.x - r.x, q.y - r.y) < 190) { want = 1; break; } }
+      if (r._brT > 0) { r._brT -= dt; want = 1; }
+      r._brA = (r._brA || 0) + (want - (r._brA || 0)) * (1 - Math.exp(-dt * 5));
     }
     drawRouters(g, r, col) {
       const rnd = rngOf(r.id * 31 + 7), n = Math.min(160, Math.round(r.n * 2)), spread = 8 + Math.min(40, (r.routT || 0) * 8);
@@ -437,8 +484,17 @@
       if (!this.ringOpen) { this.ring = null; return; }
       const opts = this.ringOpts(r); this.ring = { id: r.id, items: [] };
       // medallions sit in a row clear of the block (above it, or below when the block is near the top of the screen), spaced so labels never collide
-      const MR = 24, GAP = 90, p0 = this.toScreen(r.x, r.y), n = opts.length, rs = Math.max(R * c.z + MR + 22, 80), up = p0.y - rs - MR - 10 > 70;
-      const ry = up ? p0.y - rs : p0.y + rs, w0 = (n - 1) * GAP; let x0 = p0.x - w0 / 2; x0 = Math.max(MR + 30, Math.min(this.vw - MR - 30 - w0, x0));
+      const MR = 24, GAP = 90, p0 = this.toScreen(r.x, r.y), n = opts.length, rs = Math.max(R * c.z + MR + 22, 80), w0 = (n - 1) * GAP;
+      // try above / below and a few sideways shifts; keep the row on screen and as far from other regiments as possible
+      const others = this.b.regs.filter(q => q !== r && q.st !== 2).map(q => { const p = this.toScreen(q.x, q.y); return { x: p.x, y: p.y, h: Math.max(q.W, q.D) / 2 * c.z }; });
+      let up = true, ry = p0.y - rs, x0 = p0.x - w0 / 2, bestS = -1e9;
+      for (const u of [true, false]) for (const sh of [0, -GAP * 0.6, GAP * 0.6, -GAP * 1.2, GAP * 1.2]) {
+        const yy = u ? p0.y - rs : p0.y + rs; let xx = Math.max(MR + 30, Math.min(this.vw - MR - 30 - w0, p0.x - w0 / 2 + sh));
+        if (yy < 70 || yy > this.vh - 90) continue;
+        let clr = 1e9; for (let i = 0; i < n; i++) for (const q of others) clr = Math.min(clr, Math.hypot(q.x - (xx + i * GAP), q.y - yy) - q.h);
+        const sc = Math.min(clr, 120) - Math.abs(sh) * 0.15 - (u ? 0 : 6);
+        if (sc > bestS) { bestS = sc; up = u; ry = yy; x0 = xx; }
+      }
       g.save(); g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
       g.strokeStyle = 'rgba(245,207,90,0.7)'; g.lineWidth = 1.5; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(p0.x, p0.y + (up ? -R * c.z : R * c.z)); g.lineTo(Math.max(x0, Math.min(x0 + w0, p0.x)), ry + (up ? MR : -MR)); g.stroke(); g.setLineDash([]);
       opts.forEach((o, i) => {

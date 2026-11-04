@@ -81,11 +81,13 @@ Every culture can also field siege engines: battering ram, siege tower and trebu
 | Drakonia | red | Rome |
 
 - **The Crimson Horde (Mongols)** invades from the east under a dragon banner. Its supply wagons follow a dotted red supply line.
-  - **Supply clock:** every Horde army eats about 6 + size/2 supply a turn, plus 4 for each province it stands beyond Horde-held land. Resting in held land refunds only 4. The camp and held provinces trickle a little back. A stalled Horde loses about 12–14 a turn (100 → 0 by turn 9). Below zero it starves and its armies bleed. **Conquest** is the real resupply: plundering a province gives +20 (+35 for a capital), but the same province can only be stripped once every 8 turns. The Horde gets a fresh tumen every 3 turns while it holds its camp.
-- **Marching:** tap any reachable province, including a kingdom's banner plate, and the army marches there by road over several turns. The full route is drawn, and the order carries over each turn until the army arrives.
+  - **Supply clock:** every Horde army eats about 6 + size/2 supply a turn, plus 4 for each province it stands beyond Horde-held land. Resting in held land refunds only 4. The camp and held provinces trickle a little back. A stalled Horde loses about 12–14 a turn (100 → 0 by turn 9). Below zero it starves and its armies bleed. **Conquest** is the real resupply: plundering a province gives +12 supply and +25 gold (+25 supply and +60 gold for a capital), but the same province can only be stripped once every 8 turns. The Horde gets a fresh tumen every 2 turns while it holds its camp, and it cannot lay siege to a capital before turn 4.
+- **Gold and upkeep:** every regiment costs gold each turn: 2 at home, 4 abroad, and 2 for a Horde regiment. When a chest runs dry, regiments desert. The HUD shows what you pay per turn. In all-AI tests (16 campaigns), treasuries tighten by turn 4–5: the Horde drops from 150 to about 33 gold on turn 2, and kingdoms average about 80–110 by turns 2–4. The first capital usually falls between turns 5 and 8, and the Horde wins about half the time (8 of 16).
+- **Heads-up:** at the start of your turn, a red ⚠ ring and a toast warn when a Horde army can reach one of your provinces within two turns and outmatches its defenders. The Horde's own player sees **SUPPLY LOW** when supply drops below 30.
+- **Marching:** tap any reachable province, including a kingdom's banner plate, and the army marches there by road over several turns. The full route is drawn with an **ETA** tag, and the order carries over each turn until the army arrives. If a battle or a blocked road holds it up, you get a delay notice with the new ETA.
 - **Attrition:** battle losses stay with the army. Armies heal in their own land, faster when resting, and the Horde heals more slowly.
-- **Each turn:** march, recruit (gold and SUPPLY), and send envoys. Envoys offer alliance, truce, tribute or (between kingdoms) the **Coalition**, and terms can include gold, supply, land, levies and truce length.
-  - **Tribute and the Janissary levy:** the Horde demands tribute, often with a *Janissary levy* of recruits who join its army three turns later.
+- **Each turn:** march, recruit (gold and SUPPLY), and send envoys. Envoys offer alliance, truce, tribute or (between kingdoms) the **Coalition**, and terms can include gold, supply, land, a Blood Tribute and truce length.
+  - **Tribute and the Blood Tribute:** the Horde demands tribute, often with a *Blood Tribute* of young recruits who return three turns later as **Oathbound** in its army.
   - **Spies (60 gold):** a 70% chance of a 3-turn report on the target's gold, supply and armies. Against the Horde, a spy also burns 20 supply. A caught spy closes that court to your envoys for 3 turns.
   - **Coalition:** members are allied with one another. With two or more members, coalition riders cost the Horde 3 supply per member each turn.
 - **Treaty scrolls** are sealed in wax with **Accept** or **Refuse**.
@@ -110,6 +112,17 @@ Every culture can also field siege engines: battering ram, siege tower and trebu
 - **Battles against AI** run locally on the player's device.
 - **Offline testing:** `?relay=local` uses a BroadcastChannel between tabs.
 
+## Polish, art and audio
+- **Game feel:** flank and rear charges flash, shake the camera and scatter the struck block. Cavalry kicks up dust, and arrows fly in visible arcs with ground shadows. Breaches throw masonry, and ring falls, breaches and routs get a beat of slow motion. A braced pike block visibly lowers its spears, tightens its files and calls out **BRACED** when horse hit it. Victories and defeats end with a banner flourish.
+- **Screens:** a loading screen with the title art, fade transitions, button press feedback, and a skippable first-time tutorial (4 battle tips and 3 campaign tips; *Skip tips* turns them all off). Blessing of Mars and the Curse meter (☾, faith / cost) each get a one-time explanation.
+- **Army panel:** a slim strip above the map bar that expands on demand (▴/▾). It never covers End Turn or Envoys, map taps pass around it, and collapsing it keeps the army selected.
+- **Quick Battle preset "Pikes vs Charge":** a Macedonian phalanx with Cretan archers against a Keshig lancer charge.
+- **Saves are versioned:** an incompatible save is dropped, and *Continue* only appears for a valid save.
+- **Share** always sits next to *Copy link*. Where the browser cannot share, it copies the link instead.
+- **Names in one place:** the title, subtitle, tag, share text, levy name (**Blood Tribute**) and recruit name (**Oathbound**) live in `HB.CONFIG` in `js/config.js`.
+- **Art slots:** drop images into `/workspace/timeline-brawl-art/` (title key art, `kingdom_crests.jpg`, `horde_crest.jpg`, `oathbound_unit.jpg`) and run `python3 tools/import_art.py`. The script crops and compresses them into `assets/art/` and writes `js/art.js` (`HB.ART`). Crests appear on the title, map banners, army banners, the treaty scroll, the envoys panel and the faction pickers. Any slot left empty falls back to the drawn heraldry.
+- **Audio credit:** every sound is synthesised live with the Web Audio API in `js/audio.js` (layered clash, war horns, drums, arrow volleys, a crowd roar and the campaign map drone). No samples or third-party audio files are used, so there is nothing to license. A mute toggle sits on the title screen and in the map menu, and it is remembered.
+
 ## Code layout
 | File | Contents |
 |---|---|
@@ -123,14 +136,16 @@ Every culture can also field siege engines: battering ram, siege tower and trebu
 | `js/mapview.js` | parchment campaign map |
 | `js/net.js` | relay, lockstep and rooms |
 | `js/ui.js` | screens and gestures |
-| `js/audio.js` | WebAudio sound effects |
+| `js/config.js` | title text, the levy and recruit names, and share text (one constant) |
+| `js/art.js` | generated art manifest (`tools/import_art.py`) |
+| `js/audio.js` | procedural WebAudio sound effects and music |
 
 Everything is plain static files with no build step. There are **no secrets** in the repo: ntfy.sh topics are public and anonymous.
 
 ## Tests
 ```
-node test/simtest.cjs                      # 16 headless gameplay checks (flank > frontal, braced pikes vs charge, …)
+node test/simtest.cjs                      # headless gameplay checks: flank > frontal, braced pikes vs charge, names, upkeep, all-AI balance, …
 python3 -m http.server 8765 &              # then:
-node test/e2e.cjs                          # Playwright, 412×860 touch viewport: controls, siege, campaign, replay, pass & play, no console errors
+node test/e2e.cjs                          # Playwright, 412×860 touch viewport: controls, tutorial, siege, campaign strip/ETA, replay, pass & play, crests, mute, saves, Pikes vs Charge, no console errors
 node test/online.cjs <url> local|ntfy      # two browsers: lobby, live H2H battle in lockstep, rejoin, more turns with matching state hashes
 ```
