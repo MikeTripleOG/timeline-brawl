@@ -17,18 +17,24 @@ let pass = 0, fail = 0; const ok = (c, m) => { if (c) { pass++; console.log('  â
 
   console.log('title');
   await pg.goto(BASE); await pg.waitForSelector('#title.ready', { timeout: 8000 }); await pg.waitForTimeout(300);
-  const ka = await ev(() => { const sc = document.getElementById('kaScene'), r = sc.getBoundingClientRect(), st = document.getElementById('kaStrip').getBoundingClientRect(), b = document.getElementById('bBegin').getBoundingClientRect();
-    return { art: !!(__tb.HB.ART.title && /title_key\.webp/.test(getComputedStyle(sc).backgroundImage)), cover: r.width >= innerWidth - 1 && r.bottom >= st.top - 1, strip: st.bottom >= innerHeight - 1 && st.height >= 50, onStrip: b.top >= st.top && b.bottom <= st.bottom, pulse: getComputedStyle(document.getElementById('bBegin')).animationName, codeTitle: document.getElementById('logoTxt').offsetParent !== null || document.getElementById('subTxt').offsetParent !== null }; });
-  ok(ka.art && ka.cover && ka.strip, 'title key art fills the screen above the parchment strip');
+  const probeKA = () => ev(() => { const A = __tb.HB.ART.titleArt, im = document.getElementById('kaImg'), r = im.getBoundingClientRect(), P = im.currentSrc.endsWith(A.portrait.src) ? A.portrait : A.landscape, st = document.getElementById('kaStrip').getBoundingClientRect(), b = document.getElementById('bBegin').getBoundingClientRect();
+    const t = { l: r.left + P.title[0] * r.width, r: r.left + P.title[1] * r.width, t: r.top + P.title[2] * r.height }, paintedStrip = r.top + P.stripTop * r.height;
+    return { src: im.currentSrc.split('/').pop(), loaded: im.complete && im.naturalWidth === P.w, titleOn: t.l >= 0 && t.r <= innerWidth && t.t >= 0, strip: Math.abs(st.top - paintedStrip) < 2 && st.bottom >= innerHeight - 1 && st.height >= 34, imgBottom: Math.round(r.bottom), onStrip: b.top >= st.top && b.bottom <= st.bottom + 1 && b.width > 0, pulse: getComputedStyle(document.getElementById('bBegin')).animationName, codeTitle: document.getElementById('logoTxt').offsetParent !== null || document.getElementById('subTxt').offsetParent !== null }; });
+  const ka = await probeKA();
+  ok(ka.src === 'title_portrait.webp' && ka.loaded && ka.titleOn, 'portrait phone gets the portrait key art with its painted title fully on screen (' + ka.src + ')');
+  ok(ka.strip, 'the loading bar / Tap to begin overlay sits on the painting\'s own parchment strip');
   ok(ka.onStrip && ka.pulse === 'tapPulse' && await pg.isVisible('text=Tap to begin'), 'a pulsing "Tap to begin" sits on the parchment strip');
   ok(!ka.codeTitle && !(await pg.isVisible('#bQuick')), 'no duplicate code-drawn title and the menu waits behind the splash');
   await pg.screenshot({ path: SHOTS + '/e2e-splash.png' });
   await pg.touchscreen.tap(206, 300); await pg.waitForTimeout(700);
   ok(await pg.isVisible('text=Trial version') && await pg.isVisible('#bQuick') && !(await pg.isVisible('#bBegin')), 'tapping the splash goes to the menu with the gold "Trial version" tag');
   await pg.setViewportSize({ width: 844, height: 390 }); await pg.waitForTimeout(300);
-  const ls = await ev(() => { const tb = document.querySelector('#title .titlebox').getBoundingClientRect(), bq = document.getElementById('bQuick').getBoundingClientRect(); return tb.top >= 0 && tb.bottom <= innerHeight && tb.left > innerWidth * 0.45 && bq.bottom <= innerHeight; });
+  const ls = await ev(() => { const tb = document.querySelector('#title .titlebox').getBoundingClientRect(), bq = document.getElementById('bQuick').getBoundingClientRect(); return tb.top >= 0 && tb.bottom <= innerHeight && tb.left >= parseFloat(getComputedStyle(document.getElementById('title')).getPropertyValue('--kaTitleR')) && bq.bottom <= innerHeight; });
   ok(ls, 'landscape phone: the menu card sits right of the painted title and fits the screen');
-  await pg.setViewportSize({ width: 412, height: 860 }); await pg.waitForTimeout(300);
+  await pg.goto(BASE); await pg.waitForSelector('#title.ready', { timeout: 8000 }); await pg.waitForTimeout(300);
+  const kl = await probeKA(); await pg.screenshot({ path: SHOTS + '/e2e-splash-landscape.png' });
+  ok(kl.src === 'title_landscape.webp' && kl.loaded && kl.titleOn && kl.strip && kl.onStrip, 'landscape phone gets the landscape key art: painted title on screen, Tap to begin on its strip (' + kl.src + ')');
+  await pg.setViewportSize({ width: 412, height: 860 }); await pg.waitForTimeout(300); await pg.click('#bBegin', { force: true }); await pg.waitForTimeout(600);
   await pg.screenshot({ path: SHOTS + '/e2e-title.png' });
 
   console.log('quick battle (tap-first controls)');

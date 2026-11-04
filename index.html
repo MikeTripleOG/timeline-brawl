@@ -16,8 +16,8 @@
   <!-- title -->
   <section id="title" class="screen on splash">
     <div class="titlebg"></div>
-    <!-- key art (HB.ART.titleLayers): the painting carries the title, so no title text is drawn over it -->
-    <div class="ka" aria-hidden="true"><div class="ka-scene" id="kaScene"></div><div class="ka-logo" id="kaLogo"></div></div>
+    <!-- key art (HB.ART.titleArt): the painting carries the title, so no title text is drawn over it -->
+    <div class="ka" id="ka"><div class="ka-blur" id="kaBlur" aria-hidden="true"></div><!-- <picture> (portrait / landscape key art) is added by keyArt() in js/ui.js from HB.ART.titleArt --></div>
     <div class="ka-strip" id="kaStrip"><div class="ldbar" id="ldBar"><b id="ldFill"></b></div><button class="tapgo" id="bBegin">Tap to begin</button></div>
     <div class="titlebox">
       <div class="logo" id="logoTxt">Timeline Brawl</div>

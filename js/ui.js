@@ -766,31 +766,50 @@
   }
   G.addEventListener('hashchange', route);
   applyConfig();
-  // ---------- title key art: one 16:9 painting cropped live for portrait and landscape phones ----------
-  // Landscape: the whole painting minus its bottom strip, cropped so the painted title stays in view.
-  // Portrait: the painted title (title_logo.webp) on top, then the battle below the tagline, cropped round the clash.
+  // ---------- title key art: a portrait and a landscape painting served through <picture> by aspect ratio ----------
+  // Each painting carries its own title, tagline and blank parchment strip. layoutKeyArt() scales it so the painted title
+  // and most of the strip stay on screen (cover when that is possible, otherwise a blurred fill at the edges), then sets
+  // the loading bar / "Tap to begin" on the painting's own strip.
+  function KA() { return HB.ART && HB.ART.titleArt; }
+  var kaImg, kaMQ; // var with no initialiser: applyConfig() runs keyArt() before this line is reached
   function keyArt() {
-    const T = HB.ART && HB.ART.title, L = HB.ART && HB.ART.titleLayers, ti = $('title');
-    ti.classList.toggle('keyart', !!(T && L)); if (!T || !L) { ti.classList.remove('splash'); return; }
-    $('kaScene').style.backgroundImage = 'url(' + T + ')'; $('kaLogo').style.backgroundImage = 'url(' + L.logo + ')'; $('kaStrip').style.backgroundImage = 'url(' + L.strip + ')';
-    $('kaLogo').setAttribute('aria-label', L.logoAlt || ''); layoutKeyArt();
+    const A = KA(), ti = $('title');
+    ti.classList.toggle('keyart', !!A); if (!A) { ti.classList.remove('splash'); return; }
+    if (!kaImg) {
+      const pic = document.createElement('picture');
+      if (A.portrait && A.landscape) { const so = document.createElement('source'); so.media = A.media; so.srcset = A.portrait.src; so.type = 'image/webp'; pic.appendChild(so); }
+      kaImg = document.createElement('img'); kaImg.id = 'kaImg'; kaImg.alt = A.alt; kaImg.decoding = 'async'; kaImg.fetchPriority = 'high'; kaImg.draggable = false;
+      kaImg.src = (A.landscape || A.portrait).src; pic.appendChild(kaImg); $('ka').appendChild(pic);
+      kaImg.addEventListener('load', layoutKeyArt);
+      kaMQ = matchMedia(A.media); (kaMQ.addEventListener ? kaMQ.addEventListener('change', layoutKeyArt) : kaMQ.addListener(layoutKeyArt));
+    }
+    layoutKeyArt();
+  }
+  function kaVariant() { // the painting <picture> is showing (or about to show) for this screen
+    const A = KA(); if (!A) return null; if (!A.portrait || !A.landscape) return A.landscape || A.portrait;
+    const cur = kaImg && kaImg.complete && kaImg.currentSrc || '';
+    if (cur) return cur.endsWith(A.portrait.src) ? A.portrait : A.landscape;
+    return matchMedia(A.media).matches ? A.portrait : A.landscape;
   }
   function layoutKeyArt() {
-    const L = HB.ART && HB.ART.titleLayers, ti = $('title'); if (!L || !ti.classList.contains('keyart')) return;
-    const vw = ti.clientWidth || innerWidth, vh = ti.clientHeight || innerHeight, portrait = vw / vh < 1.45, splash = ti.classList.contains('splash');
+    const ti = $('title'), P = kaVariant(); if (!P || !ti.classList.contains('keyart') || !kaImg) return;
+    const vw = ti.clientWidth || innerWidth, vh = ti.clientHeight || innerHeight, portrait = P.h > P.w;
     ti.classList.toggle('ka-portrait', portrait); ti.classList.toggle('ka-landscape', !portrait);
-    const stripH = splash ? Math.round(portrait ? Math.max(56, Math.min(84, vh * 0.09)) : Math.max(44, Math.min(96, vh * 0.12))) : 0;
-    $('kaStrip').style.height = stripH + 'px';
-    const [lx0, lx1, ly1] = L.logoBox, la = (lx1 - lx0) * L.w / (ly1 * L.h); // logo aspect
-    let top = 0, y0 = 0, y1 = L.stripTop - 0.01, logoH = 0;
-    if (portrait) { const lw = Math.min(vw, 560); logoH = Math.round(lw / la); const lg = $('kaLogo'); lg.style.width = lw + 'px'; lg.style.height = logoH + 'px'; y0 = Math.max(L.sceneTop, ly1 + 0.005); } // the battle runs under the painted title, so tablets get no dark side bars
-    ti.style.setProperty('--logoH', logoH + 'px');
-    const bw = vw, bh = Math.max(1, vh - stripH - top), sc = $('kaScene');
-    sc.style.top = top + 'px'; sc.style.height = bh + 'px';
-    const s = Math.max(bw / L.w, bh / ((y1 - y0) * L.h)), iw = L.w * s, ih = L.h * s, vis = bw / iw; // vis = fraction of the width in view
-    let fx = L.focusX - vis / 2; if (!portrait) fx = Math.min(fx, lx0 - 0.01); fx = Math.max(0, Math.min(1 - vis, fx));
-    const visH = bh / ih, fy = portrait ? y0 + Math.max(0, (y1 - y0) - visH) * 0.45 : Math.max(0, Math.min(y1 - visH, 0.012)); // landscape: a sliver off the sky at most // landscape: keep the painted title at the top
-    sc.style.backgroundSize = Math.round(iw) + 'px ' + Math.round(ih) + 'px'; sc.style.backgroundPosition = Math.round(-fx * iw) + 'px ' + Math.round(-fy * ih) + 'px';
+    $('kaBlur').style.backgroundImage = 'url(' + P.blur + ')';
+    const [tx0, tx1, ty0, ty1] = P.title, m = 0.006, rx0 = Math.max(0, tx0 - m), rx1 = Math.min(1, tx1 + m), ry0 = Math.max(0, ty0 - m);
+    const keep = Math.min(1, P.stripTop + (portrait ? 0.11 : 0.085)); // how much of the parchment must stay on screen
+    const cover = Math.max(vw / P.w, vh / P.h), fit = Math.min(vw / ((rx1 - rx0) * P.w), vh / ((keep - ry0) * P.h)), s = Math.min(cover, fit);
+    const iw = P.w * s, ih = P.h * s; let left, top;
+    if (iw <= vw + 0.5) left = (vw - iw) / 2; else { const lo = Math.max(vw - iw, -rx0 * iw), hi = Math.min(0, vw - rx1 * iw); left = Math.max(lo, Math.min(hi, vw / 2 - P.focusX * iw)); }
+    const stripH = (1 - P.stripTop) * ih; // the painted parchment, which is stretched (up to 35%) or squeezed to fill the screen's bottom edge
+    if (ih <= vh + 0.5) top = Math.max(0, vh - ih - stripH * 0.35); else top = Math.max(vh - ih, -ry0 * ih); // the title stays in view; any gap left goes to the blurred sky
+    Object.assign(kaImg.style, { width: Math.round(iw) + 'px', height: Math.round(ih) + 'px', left: Math.round(left) + 'px', top: Math.round(top) + 'px' });
+    const st = $('kaStrip'), sy = top + P.stripTop * ih, sx0 = Math.max(0, left), sx1 = Math.min(vw, left + iw), ho = vh - sy, k = ho / stripH;
+    Object.assign(st.style, { top: Math.round(sy) + 'px', height: Math.round(ho) + 'px', left: Math.round(sx0) + 'px', width: Math.round(sx1 - sx0) + 'px',
+      backgroundImage: 'url(' + (kaImg.currentSrc || P.src) + ')', backgroundSize: Math.round(iw) + 'px ' + Math.round(ih * k) + 'px', backgroundPosition: Math.round(left - sx0) + 'px ' + Math.round(-P.stripTop * ih * k) + 'px' });
+    ti.style.setProperty('--kaTitleB', Math.round(top + ty1 * ih) + 'px'); // portrait menu card sits under the painted tagline
+    ti.style.setProperty('--kaTitleR', Math.round(left + tx1 * iw) + 'px');
+    ti.classList.toggle('ka-gaps', iw < vw - 1 || ih < vh - 1);
   }
   addEventListener('resize', layoutKeyArt); addEventListener('orientationchange', () => setTimeout(layoutKeyArt, 120));
   function begin() { // the splash's "Tap to begin": unlock audio and reveal the menu
@@ -802,10 +821,11 @@
   (function boot() { // loading: a progress bar on the parchment strip while the painting arrives, then "Tap to begin"
     const ti = $('title');
     if (location.hash.length > 1 || !ti.classList.contains('keyart')) { ti.classList.remove('splash'); ti.classList.add('ready'); layoutKeyArt(); return; } // deep links (#room, #watch) skip the splash
-    const srcs = [HB.ART.title, HB.ART.titleLayers.logo, HB.ART.titleLayers.strip].concat([...document.querySelectorAll('#crestRow img')].map(i => i.src));
+    const imgs = [kaImg].concat([...document.querySelectorAll('#crestRow img')]); // only the <picture> variant for this screen downloads
     let n = 0, done = false; const fill = $('ldFill');
-    const ready = () => { if (done) return; done = true; fill.style.width = '100%'; setTimeout(() => ti.classList.add('ready'), 200); };
-    for (const src of srcs) { const im = new Image(); im.onload = im.onerror = () => { n++; fill.style.width = Math.round(15 + 85 * n / srcs.length) + '%'; if (n >= srcs.length) ready(); }; im.src = src; }
+    const ready = () => { if (done) return; done = true; fill.style.width = '100%'; layoutKeyArt(); setTimeout(() => ti.classList.add('ready'), 200); };
+    const tick = () => { n++; fill.style.width = Math.round(15 + 85 * n / imgs.length) + '%'; if (n >= imgs.length) ready(); };
+    for (const im of imgs) { if (im.complete) tick(); else { im.addEventListener('load', tick, { once: true }); im.addEventListener('error', tick, { once: true }); } }
     setTimeout(ready, 4000); // never hold the player hostage to a slow image
   })();
   route();
